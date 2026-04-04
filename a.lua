@@ -12,7 +12,7 @@ end
 
 local espData = { 
     survivors = {}, killers = {}, generators = {}, batteries = {}, fuses = {}, texts = {}, 
-    minions = {}, traps = {}, nameStamConns = {}, pool = {} 
+    minions = {}, traps = {}, nameStamConns = {}, pool = {}, doors = {}
 }
 local function getSafeGui()
     local success, res = pcall(function() return game:GetService("CoreGui") end)
@@ -1720,6 +1720,67 @@ VisualsBox:AddToggle("BatESP", {
             if espData.batAdd then espData.batAdd:Disconnect() end
             if espData.batRemove then espData.batRemove:Disconnect() end
             clearESP(espData.batteries)
+        end
+    end
+})
+
+VisualsBox:AddToggle("DoorHits", {
+    Text = "Show hits left on door",
+    Default = false,
+    Callback = function(Value)
+        if Value then
+            local function addDoor(v)
+                local maps = workspace:FindFirstChild("MAPS")
+                local gameMap = maps and maps:FindFirstChild("GAME MAP")
+                local doorsFolder = gameMap and gameMap:FindFirstChild("Doors")
+
+                if not (doorsFolder and v:IsDescendantOf(doorsFolder)) then
+                    return
+                end
+
+                local breaks = v:GetAttribute("Breaks")
+                if breaks == nil then return end
+
+                local gui = addSimpleTextLabel(
+                    v,
+                    "(" .. tostring(breaks) .. ")",
+                    Color3.fromRGB(255, 200, 100),
+                    V3(0, 3, 0)
+                )
+
+                if not gui then return end
+
+                task.spawn(function()
+                    while v.Parent do
+                        local newBreaks = v:GetAttribute("Breaks")
+
+                        if newBreaks == nil then
+                            gui:Destroy()
+                            break
+                        end
+
+                        local txt = gui:FindFirstChildOfClass("TextLabel")
+                        if txt then
+                            txt.Text = "[" .. tostring(newBreaks) .. "]"
+                        end
+
+                        task.wait(0.5)
+                    end
+                end)
+            end
+
+            for _, v in ipairs(workspace:GetDescendants()) do
+                pcall(addDoor, v)
+            end
+
+            espData.doorConn = workspace.DescendantAdded:Connect(function(v)
+                pcall(addDoor, v)
+            end)
+        else
+            if espData.doorConn then
+                espData.doorConn:Disconnect()
+                espData.doorConn = nil
+            end
         end
     end
 })
