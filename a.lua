@@ -997,7 +997,7 @@ local function runPoolESP()
     local screenSize = cam.ViewportSize
     
     local targets = {}
-    for tblName, tbl in pairs({survivors = espData.survivors, killers = espData.killers, generators = espData.generators, batteries = espData.batteries, fuses = espData.fuses, minions = espData.minions, traps = espData.traps}) do
+    for tblName, tbl in pairs({survivors = espData.survivors, killers = espData.killers, generators = espData.generators, batteries = espData.batteries, fuses = espData.fuses, minions = espData.minions, traps = espData.traps, doors = espData.doors}) do
         for obj, colorInfo in pairs(tbl) do
             if not (obj and obj.Parent and obj:IsDescendantOf(workspace)) then
                 tbl[obj] = nil
@@ -1020,6 +1020,7 @@ local function runPoolESP()
                     elseif tblName == "generators" then priority = 200
                     elseif tblName == "batteries" then priority = 300
                     elseif tblName == "fuses" then priority = 400
+					elseif tblName == "doors" then priority = 150
                     end
                     
                     local isDocked = false
@@ -1725,7 +1726,7 @@ VisualsBox:AddToggle("BatESP", {
 })
 
 VisualsBox:AddToggle("DoorHits", {
-    Text = "Show hits left on door",
+    Text = "Show hits left on doors",
     Default = false,
     Callback = function(Value)
         if Value then
@@ -1733,10 +1734,14 @@ VisualsBox:AddToggle("DoorHits", {
                 local maps = workspace:FindFirstChild("MAPS")
                 local gameMap = maps and maps:FindFirstChild("GAME MAP")
                 local doorsFolder = gameMap and gameMap:FindFirstChild("Doors")
-
+				
                 if not (doorsFolder and v:IsDescendantOf(doorsFolder)) then
                     return
                 end
+
+				if doubleDoorsFolder and v:IsDescendantOf(doubleDoorsFolder) then
+					return
+				end
 
                 local breaks = v:GetAttribute("Breaks")
                 if breaks == nil then return end
@@ -1781,6 +1786,8 @@ VisualsBox:AddToggle("DoorHits", {
                 espData.doorConn:Disconnect()
                 espData.doorConn = nil
             end
+
+			clearESP(espData.doors)
         end
     end
 })
@@ -2150,7 +2157,7 @@ getgenv().RepzHubUnload = function()
         end
     end)
     
-    for _, tbl in pairs({espData.survivors, espData.killers, espData.generators, espData.batteries, espData.fuses, espData.minions, espData.traps}) do
+    for _, tbl in pairs({espData.survivors, espData.killers, espData.generators, espData.batteries, espData.fuses, espData.minions, espData.traps, espData.doors}) do
         table.clear(tbl)
     end
 
@@ -2209,3 +2216,4 @@ getgenv().RepzHubUnload = function()
         if cam and cam:FindFirstChild("RepzFBLight") then cam.RepzFBLight:Destroy() end
     end)
 end
+
