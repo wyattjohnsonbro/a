@@ -493,7 +493,8 @@ Library:Notify("Repz hub Loaded Successfully.", 4)
 
 local Tabs = {
     Info = Window:AddTab("Info", "user"),
-    Emotes = Window:AddTab("Emotes", "smile"),
+	Settings = Window:AddTab("Settings", "settings"),
+    Fun = Window:AddTab("Fun", "smile"),
     Tasks = Window:AddTab("Tasks", "list"),
     Local = Window:AddTab("Local", "user"),
     Visuals = Window:AddTab("Visuals", "eye"),
@@ -523,6 +524,7 @@ local hookedACFunctions = {}
 local acKeywords = {"anticheat", "hacker", "kick", "hackerkick", "ban", "exploit", "crash", "detect"}
 
 local SettingsBox = Tabs.Settings:AddLeftGroupbox("Bypass Options")
+
 SettingsBox:AddToggle("AC_Bypass", {
     Text = "Anti-Cheat Bypass",
     Default = false,
@@ -582,8 +584,8 @@ end
 
 updateEmoteList()
 
-local EmotesBox = Tabs.Emotes:AddLeftGroupbox("Emote Menu")
-EmotesBox:AddDropdown("EmoteSelect", {
+local EmoteBox = Tabs.Fun:AddLeftGroupbox("Emote Menu")
+EmoteBox:AddDropdown("EmoteSelect", {
     Values = emoteDropdownList,
     Default = 1,
     Multi = false,
@@ -595,7 +597,7 @@ EmotesBox:AddDropdown("EmoteSelect", {
     end,
 })
 
-EmotesBox:AddButton({
+EmoteBox:AddButton({
     Text = "Scan Emotes Folder",
     Func = function()
         updateEmoteList()
@@ -604,7 +606,7 @@ EmotesBox:AddButton({
     end
 })
 
-EmotesBox:AddToggle("PlayEmoteToggle", {
+EmoteBox:AddToggle("PlayEmoteToggle", {
     Text = "Play Emote",
     Default = false,
     Callback = function(Value)
@@ -672,6 +674,53 @@ EmotesBox:AddToggle("PlayEmoteToggle", {
             table.clear(activeEffects)
         end
     end,
+})
+
+local SnakeBox = Tabs.Fun:AddLeftGroupbox("Snake Menu")
+SnakeBox:AddToggle("SnakeGodMode", {
+    Text = "Snake God Mode",
+    Default = false,
+    Callback = function(Value)
+        _G.SnakeGod = Value
+        if Value then
+            local UIS = game:GetService("UserInputService")
+            
+            local function hookGames()
+                for _, t in ipairs(getgc(true)) do
+                    if type(t) == "table"
+                        and rawget(t, "ClassName") == "SnakeGame"
+                        and rawget(t, "CheckForDeath")
+                        and not t._GodHooked
+                    then
+                        local original = t.CheckForDeath
+                        t.CheckForDeath = newcclosure(function(self, ...)
+                            if _G.SnakeGod then
+                                return false
+                            end
+                            return original(self, ...)
+                        end)
+                        t._GodHooked = true
+                    end
+                end
+            end
+
+            hookGames()
+            snakeGodConn = task.spawn(function()
+                while _G.SnakeGod do
+                    hookGames()
+                    task.wait(1)
+                end
+            end)
+        else
+            _G.SnakeGod = false
+        end
+    end
+}):AddKeyPicker("SnakeGodModeKey", {
+    Default = "N",
+    SyncToggleState = true,
+    Mode = "Toggle",
+    Text = "God Mode Keybind",
+    NoUI = false
 })
 
 local TasksBox = Tabs.Tasks:AddLeftGroupbox("Automation")
@@ -1101,7 +1150,7 @@ local espCategories = {
     {name = "minions", tbl = espData.minions, prio = 60},
     {name = "generators", tbl = espData.generators, prio = 200},
     {name = "batteries", tbl = espData.batteries, prio = 300},
-    {name = "fuses", tbl = espData.fuses, prio = 400}
+    {name = "fuses", tbl = espData.fuses, prio = 400},
 	{name = "doors", tbl = espData.doors, prio = 250}
 }
 
@@ -2485,7 +2534,7 @@ RunService.Heartbeat:Connect(function()
     if currentActive and not lastRoundState then
         task.spawn(function()
             task.wait(1.5)
-            local targetToggles = {"SurvESP", "KillerESP", "MinionESP", "TrapESP", "GenESP", "FuseESP", "BatESP", "NameStamESP", "AutoParry"}
+            local targetToggles = {"SurvESP", "KillerESP", "MinionESP", "TrapESP", "GenESP", "FuseESP", "BatESP", "NameStamESP", "DoorESP", "AutoParry"}
             for _, toggleKey in ipairs(targetToggles) do
                 local t = Toggles[toggleKey]
                 if t and t.Value then
