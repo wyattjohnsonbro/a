@@ -12,7 +12,7 @@ end
 
 local espData = { 
     survivors = {}, killers = {}, generators = {}, batteries = {}, fuses = {}, texts = {}, 
-    minions = {}, traps = {}, nameStamConns = {}, pool = {}, doors = {}
+    minions = {}, traps = {}, nameStamConns = {}, pool = {}, genBills = {} 
 }
 local function getSafeGui()
     local success, res = pcall(function() return game:GetService("CoreGui") end)
@@ -23,6 +23,17 @@ local TargetGUI = getSafeGui()
 local nameStamESPEnabled = false
 local pendingESP = {}
 
+local _cachedPlayers = nil
+local _lastPlayersTick = 0
+local function getPlayersFolder()
+    local now = tick()
+    if not _cachedPlayers or _cachedPlayers.Parent ~= workspace or (now - _lastPlayersTick) > 2 then
+        _lastPlayersTick = now
+        _cachedPlayers = workspace:FindFirstChild("PLAYERS")
+    end
+    return _cachedPlayers
+end
+
 local TweenService = game:GetService("TweenService")
 local CoreGui = game:GetService("CoreGui")
 local UserInputService = game:GetService("UserInputService")
@@ -30,7 +41,15 @@ local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local silentAimEnabled = false
+local silentAimPrediction = false
+local predictionVelocityScale = 1.0
+local predictionProjectileSpeed = 750 
 local silentAimTarget = nil
+local autoShakeEnabled = false
+local isShaking = false
+
+local activeKillerRole = nil
+local ennardEHeld = false
 
 local lastTargetTick = 0
 local cachedTarget = nil
@@ -45,12 +64,13 @@ local function getSilentAimTarget()
     
     local isKiller = (char.Parent and char.Parent.Name == "KILLER")
     local teamFolder = isKiller and "ALIVE" or "KILLER"
-    local enemyFolder = workspace:FindFirstChild("PLAYERS") and workspace.PLAYERS:FindFirstChild(teamFolder)
+    local pFolder = getPlayersFolder()
+    local enemyFolder = pFolder and pFolder:FindFirstChild(teamFolder)
     if not enemyFolder then cachedTarget = nil return nil end
     
     local closest, dist = nil, 1000
     local cam = workspace.CurrentCamera
-    local fovLimit = 0.5 
+    local fovLimit = 0.5
 
     for _, v in ipairs(enemyFolder:GetChildren()) do
         local hrp = v:FindFirstChild("HumanoidRootPart")
@@ -67,6 +87,26 @@ local function getSilentAimTarget()
     end
     cachedTarget = closest
     return closest
+end
+
+local function getPredictedPosition(tPart, origin)
+    if not tPart then return nil end
+    local pos = tPart.Position
+    if not (silentAimEnabled and silentAimPrediction) then return pos end
+    
+    local vel = tPart.Velocity
+    if vel.Magnitude < 0.05 then return pos end
+    
+    -- Ping compensation
+    local ping = (LocalPlayer:GetNetworkPing() or 0) 
+    
+    -- Distance / Speed = Travel Time
+    local travelTime = (pos - origin).Magnitude / math.max(predictionProjectileSpeed, 1)
+    
+    -- Total time = time for projectile to travel + the time it takes for your 'hit' to reach the server
+    local totalTime = travelTime + ping
+    
+    return pos + (vel * totalTime * predictionVelocityScale)
 end
 
 local Lighting = game:GetService("Lighting")
@@ -87,6 +127,14 @@ local function getSurvivorColor(char)
     else return Color3.fromRGB(0, 255, 0) end
 end
 
+local function getGenColor(prog)
+    if prog >= 100 then return C3(0, 255, 0)
+    elseif prog >= 75 then return C3(100, 255, 0)
+    elseif prog >= 50 then return C3(255, 255, 0)
+    elseif prog >= 25 then return C3(255, 140, 0)
+    else return C3(255, 60, 60) end
+end
+
 local function getRoleLabel(char)
     local c = char:GetAttribute("Character") or ""
     if c == "" then
@@ -104,9 +152,9 @@ end
 
 getgenv().RepzLoops = getgenv().RepzLoops or {}
 
--- Utility: Get Active Killer
 local function getActiveKiller()
-    local killerFolder = workspace:FindFirstChild("PLAYERS") and workspace.PLAYERS:FindFirstChild("KILLER")
+    local p = getPlayersFolder()
+    local killerFolder = p and p:FindFirstChild("KILLER")
     if killerFolder then
         for _, v in ipairs(killerFolder:GetChildren()) do
             if v:FindFirstChild("HumanoidRootPart") and v ~= LocalPlayer.Character then
@@ -117,15 +165,42 @@ local function getActiveKiller()
     return nil
 end
 
+local lastRoundTick = 0
+local cachedRoundState = false
 local function isRoundActive()
-    local p = workspace:FindFirstChild("PLAYERS")
-    if not p then return false end
+    local now = tick()
+    if now - lastRoundTick < 0.2 then return cachedRoundState end
+    lastRoundTick = now
+    
+    local p = getPlayersFolder()
+    if not p then cachedRoundState = false return false end
     local k = p:FindFirstChild("KILLER")
     local a = p:FindFirstChild("ALIVE")
-    return (k and #k:GetChildren() > 0) or (a and #a:GetChildren() > 0)
+    local res = (k and k:FindFirstChildWhichIsA("Model") ~= nil) or (a and a:FindFirstChildWhichIsA("Model") ~= nil)
+    cachedRoundState = res
+    return res
 end
 
--- Dynamic Anti-Cheat Deletion
+local lastRoleTick = 0
+local cachedMyRole = nil
+local function getMyRole()
+    local char = LocalPlayer.Character
+    if not char then cachedMyRole = nil return nil end
+    local now = tick()
+    if now - lastRoleTick < 0.5 then return cachedMyRole end
+    lastRoleTick = now
+    local res = getRoleLabel(char)
+    cachedMyRole = res
+    return res
+end
+
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if not gpe and input.KeyCode == Enum.KeyCode.E then ennardEHeld = true end
+end)
+UserInputService.InputEnded:Connect(function(input, gpe)
+    if input.KeyCode == Enum.KeyCode.E then ennardEHeld = false end
+end)
+
 task.spawn(function()
     local function checkAndDestroy(obj)
         if obj:IsA("ScreenGui") or obj:IsA("LocalScript") then
@@ -145,7 +220,13 @@ task.spawn(function()
     end
 end)
 
--- Metatable Hooks: Anti-Cheat Bypass & Silent Aim Fix
+
+local function shouldRunSilentAim()
+    if not silentAimEnabled then return false end
+    if getMyRole() == "Ennard" then return ennardEHeld end
+    return true
+end
+
 local successHook, errHook = pcall(function()
     local gm = getrawmetatable(game)
     local oldNamecall = gm.__namecall
@@ -155,53 +236,56 @@ local successHook, errHook = pcall(function()
         local method = getnamecallmethod()
         
         if not checkcaller() then
-            if method == "Kick" or method == "kick" then
-                if self == LocalPlayer then return nil end
-            end
-
-            -- SILENT AIM (AXE/PROJECTILES)
-            if silentAimEnabled and (method == "Raycast" or method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList") then
-                local target = getSilentAimTarget()
-                local tPart = target and (target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart"))
-                if tPart then
-                    local args = {...}
-                    if method == "Raycast" then
-                        args[2] = (tPart.Position - args[1]).Unit * 1000
-                        return oldNamecall(self, unpack(args))
-                    elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" then
-                        local origin = args[1].Origin
-                        args[1] = Ray.new(origin, (tPart.Position - origin).Unit * 1000)
-                        return oldNamecall(self, unpack(args))
+            if shouldRunSilentAim() and (method == "Raycast" or method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList") then
+                local caller = getcallingscript and getcallingscript()
+                local isCameraClass = false
+                if caller then
+                    local cn = caller.Name
+                    if cn == "CameraModule" or cn == "PopperCam" or cn == "ZoomController" or cn == "BaseCamera" or cn == "ControlModule" or (caller.Parent and caller.Parent.Name == "CameraModule") then
+                        isCameraClass = true
+                    end
+                end
+                
+                if not isCameraClass then
+                    local target = getSilentAimTarget()
+                    local tPart = target and (target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart"))
+                    if tPart then
+                        local args = {...}
+                        if method == "Raycast" then
+                            local origin = args[1]
+                            local predictedPos = getPredictedPosition(tPart, origin)
+                            args[2] = (predictedPos - origin).Unit * 1000
+                            return oldNamecall(self, unpack(args))
+                        elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" then
+                            local origin = args[1].Origin
+                            local predictedPos = getPredictedPosition(tPart, origin)
+                            args[1] = Ray.new(origin, (predictedPos - origin).Unit * 1000)
+                            return oldNamecall(self, unpack(args))
+                        end
                     end
                 end
             end
             
             if method == "FireServer" or method == "InvokeServer" then
                 local remoteName = tostring(self.Name):lower()
-                if remoteName == "kick" or remoteName == "ban" then return nil end
 
-                -- Redirecting Vector3s/CFrames for Projectiles (Axe Fix)
-                if silentAimEnabled and (remoteName:find("swing") or remoteName:find("throw") or remoteName:find("attack")) then
+                if shouldRunSilentAim() and (remoteName:find("swing") or remoteName:find("throw") or remoteName:find("attack")) then
                     local target = getSilentAimTarget()
                     local tPart = target and (target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart"))
                     if tPart then
                         local args = {...}
+                        local char = LocalPlayer.Character
+                        local origin = char and char:FindFirstChild("HumanoidRootPart") and char.HumanoidRootPart.Position or Camera.CFrame.Position
+                        local predictedPos = getPredictedPosition(tPart, origin)
+                        
                         for i, v in ipairs(args) do
                             if typeof(v) == "Vector3" then
-                                args[i] = tPart.Position
+                                args[i] = predictedPos
                             elseif typeof(v) == "CFrame" then
-                                args[i] = tPart.CFrame
+                                args[i] = CFrame.new(predictedPos, predictedPos + (predictedPos - origin).Unit)
                             end
                         end
                         return oldNamecall(self, unpack(args))
-                    end
-                end
-                
-                local args = {...}
-                for _, v in pairs(args) do
-                    if type(v) == "string" then
-                        local argString = v:lower()
-                        if argString == "kick" or argString == "ban" then return nil end
                     end
                 end
             end
@@ -212,16 +296,27 @@ local successHook, errHook = pcall(function()
     
     local oldIndex = gm.__index
     gm.__index = newcclosure(function(self, k)
-        if silentAimEnabled and not checkcaller() and (self == Mouse) then
-            if k == "Target" or k == "Hit" or k == "UnitRay" then
+        if shouldRunSilentAim() and not checkcaller() and (self == Mouse) then
+            local caller = getcallingscript and getcallingscript()
+            local isCameraClass = false
+            if caller then
+                local cn = caller.Name
+                if cn == "CameraModule" or cn == "PopperCam" or cn == "ZoomController" or cn == "BaseCamera" or cn == "ControlModule" or (caller.Parent and caller.Parent.Name == "CameraModule") then
+                    isCameraClass = true
+                end
+            end
+
+            if not isCameraClass and (k == "Target" or k == "Hit" or k == "UnitRay") then
                 local target = getSilentAimTarget()
                 local tPart = target and (target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart"))
                 if tPart then
+                    local origin = Camera.CFrame.Position
+                    local predictedPos = getPredictedPosition(tPart, origin)
+                    
                     if k == "Target" then return tPart end
-                    if k == "Hit" then return tPart.CFrame end
+                    if k == "Hit" then return CFrame.new(predictedPos) end
                     if k == "UnitRay" then
-                        local origin = Camera.CFrame.Position
-                        local dir = (tPart.Position - origin).Unit
+                        local dir = (predictedPos - origin).Unit
                         return Ray.new(origin, dir)
                     end
                 end
@@ -233,7 +328,6 @@ local successHook, errHook = pcall(function()
     setreadonly(gm, true)
 end)
 
--- Dynamic Game Icon Fetcher
 local gameIconId = "rbxassetid://68073547" 
 local successIcon, productInfo = pcall(function()
     return MarketplaceService:GetProductInfo(game.PlaceId)
@@ -242,7 +336,6 @@ if successIcon and productInfo and productInfo.IconImageAssetId then
     gameIconId = "rbxassetid://" .. productInfo.IconImageAssetId
 end
 
--- Smooth Loading Screen
 local loadScreen = Instance.new("ScreenGui")
 loadScreen.Name = "RepzHubBBN"
 loadScreen.IgnoreGuiInset = true
@@ -378,7 +471,7 @@ TweenService:Create(bar, TweenInfo.new(fadeSpeed), {BackgroundTransparency = 1})
 task.wait(fadeSpeed)
 loadScreen:Destroy()
 
--- Initialize UI via LinoriaLib (Obsidian Fork)
+
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
 local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
@@ -400,7 +493,6 @@ Library:Notify("Repz hub Loaded Successfully.", 4)
 
 local Tabs = {
     Info = Window:AddTab("Info", "user"),
-    Settings = Window:AddTab("Settings", "settings"),
     Emotes = Window:AddTab("Emotes", "smile"),
     Tasks = Window:AddTab("Tasks", "list"),
     Local = Window:AddTab("Local", "user"),
@@ -411,7 +503,6 @@ local Tabs = {
     UISettings = Window:AddTab("UI Settings", "settings"),
 }
 
--- Info Tab
 local InfoBox = Tabs.Info:AddLeftGroupbox("Information")
 InfoBox:AddLabel("Main script: Repz")
 InfoBox:AddButton({
@@ -428,7 +519,6 @@ InfoBox:AddButton({
 })
 InfoBox:AddLabel("Executor Status:\nExecutor you're using: " .. executorName .. "\nWe have ran 12/12 checks, and your executor seems to support our script.", true)
 
--- Settings Tab
 local hookedACFunctions = {}
 local acKeywords = {"anticheat", "hacker", "kick", "hackerkick", "ban", "exploit", "crash", "detect"}
 
@@ -462,7 +552,6 @@ SettingsBox:AddToggle("AC_Bypass", {
     end
 })
 
--- Emotes Tab
 local storedEmotes = {}
 local emoteDropdownList = {"Select Emote First"}
 local selectedEmoteObj = nil
@@ -585,7 +674,6 @@ EmotesBox:AddToggle("PlayEmoteToggle", {
     end,
 })
 
--- Tasks Tab
 local TasksBox = Tabs.Tasks:AddLeftGroupbox("Automation")
 local autoRepairEnabled = false
 local autoRepairTask = nil
@@ -600,8 +688,13 @@ TasksBox:AddToggle("AutoRepair", {
             if not autoRepairTask then
                 autoRepairTask = task.spawn(function()
                     while autoRepairEnabled do
-                        if LocalPlayer.PlayerGui:FindFirstChild("Gen") then
-                            pcall(function() LocalPlayer.PlayerGui.Gen.GeneratorMain.Event:FireServer(true) end)
+                        local genUI = LocalPlayer.PlayerGui:FindFirstChild("Gen")
+                        if genUI then
+                            local main = genUI:FindFirstChild("GeneratorMain")
+                            local evt = main and main:FindFirstChild("Event")
+                            if evt and evt:IsA("RemoteEvent") then
+                                evt:FireServer(true)
+                            end
                         end
                         task.wait(repairInterval)
                     end
@@ -661,29 +754,77 @@ TasksBox:AddToggle("AutoShakeMinion", {
     end,
 })
 
+local instantPromptEnabled = false
+local instantPromptConn = nil
+
+local function setInstantPrompts(state)
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") then
+            if state then
+                if obj.HoldDuration ~= 0 then
+                    obj:SetAttribute("HoldDurationOld", obj.HoldDuration)
+                    obj.HoldDuration = 0
+                end
+                -- Some games check for 0 specifically, others use HoldDuration for calculations
+                obj.ClickableDuringHold = true 
+            else
+                local old = obj:GetAttribute("HoldDurationOld")
+                if old and old ~= 0 then obj.HoldDuration = old end
+            end
+        end
+    end
+end
+
+TasksBox:AddToggle("InstantPromptToggle", {
+    Text = "Instant Prompts",
+    Default = false,
+    Callback = function(Value)
+        instantPromptEnabled = Value
+        setInstantPrompts(Value)
+        if Value then
+            if not instantPromptConn then
+                instantPromptConn = true
+                task.spawn(function()
+                    while instantPromptEnabled do
+                        for _, obj in ipairs(workspace:GetDescendants()) do
+                            if not instantPromptEnabled then break end
+                            if obj:IsA("ProximityPrompt") and obj.HoldDuration ~= 0 then
+                                obj:SetAttribute("HoldDurationOld", obj.HoldDuration)
+                                obj.HoldDuration = 0
+                                obj.ClickableDuringHold = true 
+                            end
+                        end
+                        task.wait(1) -- Scans once per second, much more efficient
+                    end
+                    instantPromptConn = nil
+                end)
+            end
+        else
+            if instantPromptConn then 
+                instantPromptConn:Disconnect() 
+                instantPromptConn = nil 
+            end
+        end
+    end,
+})
+
 local dotConn = nil
 TasksBox:AddToggle("PerfectBarricade", {
     Text = "Perfect Barricade",
     Default = false,
     Callback = function(Value)
         if Value then
+            local playerGui = LocalPlayer:WaitForChild("PlayerGui")
             dotConn = RunService.RenderStepped:Connect(function()
-                pcall(function()
-                    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-                    if not playerGui then return end
-                    for _, dot in ipairs(playerGui:GetChildren()) do
-                        if (dot.Name == "Dot" or dot:FindFirstChild("Container")) and dot:IsA("ScreenGui") and dot.Enabled then
-                            local container = dot:FindFirstChild("Container")
-                            if container then
-                                local frame = container:FindFirstChild("Frame")
-                                if frame then
-                                    frame.AnchorPoint = Vector2.new(0.5, 0.5)
-                                    frame.Position = UDim2.new(0.5, 0, 0.5, 0)
-                                end
-                            end
-                        end
+                local dot = playerGui:FindFirstChild("Dot")
+                if dot and dot:IsA("ScreenGui") and dot.Enabled then
+                    local c = dot:FindFirstChild("Container")
+                    local f = c and c:FindFirstChild("Frame")
+                    if f then
+                        f.AnchorPoint = Vector2.new(0.5, 0.5)
+                        f.Position = UDim2.new(0.5, 0, 0.5, 0)
                     end
-                end)
+                end
             end)
         else
             if dotConn then dotConn:Disconnect() dotConn = nil end
@@ -702,7 +843,8 @@ TasksBox:AddToggle("AutoKill", {
                 local root = char and char:FindFirstChild("HumanoidRootPart")
                 if not root then return end
                 local closest, dist = nil, math.huge
-                local aliveFolder = workspace:FindFirstChild("PLAYERS") and workspace.PLAYERS:FindFirstChild("ALIVE")
+                local p = getPlayersFolder()
+                local aliveFolder = p and p:FindFirstChild("ALIVE")
                 if aliveFolder then
                     for _, v in ipairs(aliveFolder:GetChildren()) do
                         local hrp = v:FindFirstChild("HumanoidRootPart")
@@ -730,51 +872,6 @@ TasksBox:AddToggle("AutoKill", {
     end,
 })
 
-local instantPromptEnabled = false
-local instantPromptConn = nil
-
-local function setInstantPrompts(state)
-    for _, obj in pairs(workspace:GetDescendants()) do
-        if obj:IsA("ProximityPrompt") then
-            if state then
-                if obj.HoldDuration ~= 0 then
-                    obj:SetAttribute("HoldDurationOld", obj.HoldDuration)
-                    obj.HoldDuration = 0
-                end
-            else
-                local old = obj:GetAttribute("HoldDurationOld")
-                if old and old ~= 0 then obj.HoldDuration = old end
-            end
-        end
-    end
-end
-
-TasksBox:AddToggle("InstantPromptToggle", {
-    Text = "Instant Prompts",
-    Default = false,
-    Callback = function(Value)
-        instantPromptEnabled = Value
-        setInstantPrompts(Value)
-        if Value then
-            if not instantPromptConn then
-                instantPromptConn = workspace.DescendantAdded:Connect(function(child)
-                    task.wait(0.1)
-                    if instantPromptEnabled and child:IsA("ProximityPrompt") and child.HoldDuration ~= 0 then
-                        child:SetAttribute("HoldDurationOld", child.HoldDuration)
-                        child.HoldDuration = 0
-                    end
-                end)
-            end
-        else
-            if instantPromptConn then 
-                instantPromptConn:Disconnect() 
-                instantPromptConn = nil 
-            end
-        end
-    end,
-})
-
--- Local Tab
 local LocalBox = Tabs.Local:AddLeftGroupbox("Player Modifications")
 local sprintConn = nil
 local charAddConn = nil
@@ -820,21 +917,37 @@ LocalBox:AddInput("CustomStam", {
     Callback = function(Text) end,
 })
 
-local noclipConn = nil
+local noclipTask = nil
+local noclipCharAdd = nil
+local noclipParts = {}
 LocalBox:AddToggle("Noclip", {
     Text = "Noclip",
     Default = false,
     Callback = function(Value)
         if Value then
-            noclipConn = RunService.Stepped:Connect(function()
+            local function cacheParts()
+                table.clear(noclipParts)
                 local char = LocalPlayer.Character
                 if not char then return end
                 for _, part in ipairs(char:GetDescendants()) do
-                    if part:IsA("BasePart") then part.CanCollide = false end
+                    if part:IsA("BasePart") then table.insert(noclipParts, part) end
+                end
+            end
+            cacheParts()
+            noclipCharAdd = LocalPlayer.CharacterAdded:Connect(function()
+                task.wait(0.5)
+                cacheParts()
+            end)
+            noclipTask = RunService.Stepped:Connect(function()
+                for i = 1, #noclipParts do
+                    local p = noclipParts[i]
+                    if p.Parent then p.CanCollide = false end
                 end
             end)
         else
-            if noclipConn then noclipConn:Disconnect() noclipConn = nil end
+            if noclipTask then noclipTask:Disconnect() noclipTask = nil end
+            if noclipCharAdd then noclipCharAdd:Disconnect() noclipCharAdd = nil end
+            table.clear(noclipParts)
         end
     end,
 })
@@ -911,7 +1024,6 @@ LocalBox:AddToggle("FlyMobile", {
     end,
 })
 
--- Visuals Tab
 local VisualsBox = Tabs.Visuals:AddLeftGroupbox("ESP Features")
 local fbLoop = nil
 VisualsBox:AddToggle("FullBright", {
@@ -968,7 +1080,6 @@ local function initHighlightSuppress(char)
     table.insert(suppressConns, char.DescendantAdded:Connect(check))
 end
 
--- Initialize Highlight Pool
 for i = 1, 64 do
     pcall(function()
         local h = Ins("Highlight")
@@ -981,6 +1092,19 @@ for i = 1, 64 do
     end)
 end
 
+local activeTargets = {}
+local targetsPool = {}
+local espCategories = {
+    {name = "killers", tbl = espData.killers, prio = 0},
+    {name = "survivors", tbl = espData.survivors, prio = 10},
+    {name = "traps", tbl = espData.traps, prio = 50},
+    {name = "minions", tbl = espData.minions, prio = 60},
+    {name = "generators", tbl = espData.generators, prio = 200},
+    {name = "batteries", tbl = espData.batteries, prio = 300},
+    {name = "fuses", tbl = espData.fuses, prio = 400}
+	{name = "doors", tbl = espData.doors, prio = 250}
+}
+
 local function runPoolESP()
     local cam = Workspace.CurrentCamera
     if not cam then return end
@@ -988,7 +1112,7 @@ local function runPoolESP()
     if not isRoundActive() then
         for i = 1, 64 do
             local h = espData.pool[i]
-            if h then h.Adornee = nil; h.Enabled = false end
+            if h and h.Enabled then h.Adornee = nil; h.Enabled = false end
         end
         return
     end
@@ -996,74 +1120,91 @@ local function runPoolESP()
     local camPos = cam.CFrame.Position
     local screenSize = cam.ViewportSize
     
-    local targets = {}
-    for tblName, tbl in pairs({survivors = espData.survivors, killers = espData.killers, generators = espData.generators, batteries = espData.batteries, fuses = espData.fuses, minions = espData.minions, traps = espData.traps, doors = espData.doors}) do
+    local targetsCount = 0
+    
+    if not espData._fuseBoxes or not espData._fuseBoxes:IsDescendantOf(workspace) then
+        local maps = workspace:FindFirstChild("MAPS")
+        local gameMap = maps and maps:FindFirstChild("GAME MAP")
+        espData._fuseBoxes = gameMap and gameMap:FindFirstChild("FuseBoxes")
+    end
+    local fuseBoxes = espData._fuseBoxes
+    
+    local currentFusePositions = {}
+    if fuseBoxes then
+        for _, fuse in ipairs(fuseBoxes:GetChildren()) do
+            local fPos = (fuse:IsA("Model") and fuse:GetPivot().Position) or (fuse:IsA("BasePart") and fuse.Position)
+            if fPos then table.insert(currentFusePositions, fPos) end
+        end
+    end
+    
+    for _, cat in ipairs(espCategories) do
+        local tblName = cat.name
+        local tbl = cat.tbl
+        local priority = cat.prio or 1000
+        
         for obj, colorInfo in pairs(tbl) do
-            if not (obj and obj.Parent and obj:IsDescendantOf(workspace)) then
+            if not obj or not obj.Parent then
                 tbl[obj] = nil
                 continue
             end
             
             local bPos = (obj:IsA("Model") and obj:GetPivot().Position) or (obj:IsA("BasePart") and obj.Position)
             if bPos then
-                local sPos, onScreen = cam:WorldToViewportPoint(bPos)
                 local dist = (camPos - bPos).Magnitude
-                
-                local isRelevant = (dist < 250) or (onScreen or (sPos.X > -1000 and sPos.X < screenSize.X + 1000) and (sPos.Y > -1000 and sPos.Y < screenSize.Y + 1000))
-                
-                if isRelevant and dist < 5000 then
-                    local priority = 1000 
-                    if tblName == "killers" then priority = 0
-                    elseif tblName == "survivors" then priority = 10
-                    elseif tblName == "traps" then priority = 50
-                    elseif tblName == "minions" then priority = 60
-                    elseif tblName == "generators" then priority = 200
-                    elseif tblName == "batteries" then priority = 300
-                    elseif tblName == "fuses" then priority = 400
-					elseif tblName == "doors" then priority = 150
+                if dist < 5000 then
+                    local isRelevant = false
+                    if dist < 80 then
+                        isRelevant = true
+                    else
+                        local sPos, onScreen = cam:WorldToViewportPoint(bPos)
+                        isRelevant = (sPos.Z > 0 and (sPos.X > -350 and sPos.X < screenSize.X + 350) and (sPos.Y > -350 and sPos.Y < screenSize.Y + 350))
                     end
-                    
-                    local isDocked = false
-                    if tblName == "batteries" then
-                        local maps = workspace:FindFirstChild("MAPS")
-                        local gameMap = maps and maps:FindFirstChild("GAME MAP")
-                        local fuseBoxes = gameMap and gameMap:FindFirstChild("FuseBoxes")
-                        
-                        if fuseBoxes then
+                
+                    if isRelevant then
+                        local isDocked = false
+                        if tblName == "batteries" and fuseBoxes then
                             if obj:IsDescendantOf(fuseBoxes) then
                                 isDocked = true
                             else
-                                for _, fuse in ipairs(fuseBoxes:GetChildren()) do
-                                    local fPos = (fuse:IsA("Model") and fuse:GetPivot().Position) or (fuse:IsA("BasePart") and fuse.Position)
-                                    if fPos and (bPos - fPos).Magnitude < 1.5 then isDocked = true break end
+                                for _, fPos in ipairs(currentFusePositions) do
+                                    if (bPos - fPos).Magnitude < 1.5 then isDocked = true break end
                                 end
                             end
                         end
-                    end
-                    
-                    if not isDocked then
-                        table.insert(targets, {
-                            obj = obj,
-                            dist = dist,
-                            prio = priority,
-                            fill = colorInfo.fill,
-                            outline = colorInfo.outline or colorInfo.fill
-                        })
+                        
+                        if not isDocked then
+                            targetsCount = targetsCount + 1
+                            local t = targetsPool[targetsCount]
+                            if not t then
+                                t = {}
+                                targetsPool[targetsCount] = t
+                            end
+                            t.obj = obj
+                            t.dist = dist
+                            t.prio = priority
+                            t.fill = colorInfo.fill
+                            t.outline = colorInfo.outline or colorInfo.fill
+                            activeTargets[targetsCount] = t
+                        end
                     end
                 end
             end
         end
     end
     
-    table.sort(targets, function(a, b) 
+    for i = targetsCount + 1, #activeTargets do
+        activeTargets[i] = nil
+    end
+    
+    table.sort(activeTargets, function(a, b) 
         if a.prio ~= b.prio then return a.prio < b.prio end
         return a.dist < b.dist 
     end)
     
     for i = 1, 64 do
         local h = espData.pool[i]
-        local target = targets[i]
-        if target then
+        local target = activeTargets[i]
+        if target and i <= 31 then
             if target.obj:IsA("Model") and target.prio == 10 then
                 local c = getSurvivorColor(target.obj)
                 h.FillColor, h.OutlineColor = c, c
@@ -1073,8 +1214,10 @@ local function runPoolESP()
             h.Adornee = target.obj
             h.Enabled = true
         else
-            h.Adornee = nil 
-            h.Enabled = false
+            if h.Enabled then
+                h.Adornee = nil 
+                h.Enabled = false
+            end
         end
     end
 end
@@ -1084,35 +1227,52 @@ end)
 
 local function runTextESP()
     local cam = Workspace.CurrentCamera
-    if not (cam and type(espData.texts) == "table") then return end
+    if not cam then return end
 
     if not isRoundActive() then
-        for _, data in pairs(espData.texts) do
-            if data.gui then data.gui.Enabled = false end
+        if espData.texts then
+            for _, data in pairs(espData.texts) do
+                if data.gui then data.gui.Enabled = false end
+            end
+        end
+        if espData.genBills then
+            for _, data in pairs(espData.genBills) do
+                if data.bill then data.bill.Enabled = false end
+            end
         end
         return
     end
 
     local screenSize = cam.ViewportSize
-    local camPos = cam.CFrame.Position
     
-    for c, data in pairs(espData.texts) do
-        if not (c and c.Parent and c:IsDescendantOf(workspace)) then
-            pcall(function() if data.gui then data.gui:Destroy() end end)
-            espData.texts[c] = nil
-            continue
-        end
+    local function processTextTable(tbl, keyIsGUI)
+        if type(tbl) ~= "table" then return end
+        for c, data in pairs(tbl) do
+            local gui = keyIsGUI and data.bill or data.gui
+            if not (c and c.Parent and c:IsDescendantOf(workspace)) then
+                pcall(function() if gui then gui:Destroy() end end)
+                tbl[c] = nil
+                continue
+            end
 
-        if data.gui and data.gui.Parent then
-            local adornee = data.gui.Adornee
-            local aPos = adornee and (adornee:IsA("BasePart") and adornee.Position or (adornee:IsA("Model") and adornee:GetPivot().Position))
-            if aPos then
-                local sPos, onScreen = cam:WorldToViewportPoint(aPos)
-                local dist = (camPos - aPos).Magnitude
-                data.gui.Enabled = (dist < 400) or (onScreen or (sPos.X > -1000 and sPos.X < screenSize.X + 1000) and (sPos.Y > -1000 and sPos.Y < screenSize.Y + 1000))
+            if gui and gui.Parent then
+                local adornee = gui.Adornee
+                local aPos = adornee and (adornee:IsA("BasePart") and adornee.Position or (adornee:IsA("Model") and adornee:GetPivot().Position))
+                if aPos then
+                    local dist = (cam.CFrame.Position - aPos).Magnitude
+                    if dist < 60 then
+                        gui.Enabled = true
+                    else
+                        local sPos, onScreen = cam:WorldToViewportPoint(aPos)
+                        gui.Enabled = (sPos.Z > 0 and (sPos.X > -250 and sPos.X < screenSize.X + 250) and (sPos.Y > -250 and sPos.Y < screenSize.Y + 250))
+                    end
+                end
             end
         end
     end
+    
+    processTextTable(espData.texts, false)
+    processTextTable(espData.genBills, true)
 end
 espData.textTaskLoop = RunService.Heartbeat:Connect(function()
     pcall(runTextESP)
@@ -1347,7 +1507,6 @@ local function clearTextESP(tbl)
     if pendingESP then table.clear(pendingESP) end
 end
 
--- HELPER: Who finished the Gen/Fuse?
 local function getClosestSurvivorName(pos)
     local closestName = "Someone"
     local shortest = 25 
@@ -1387,7 +1546,7 @@ VisualsBox:AddToggle("NameStamESP", {
             end
 
             local function init()
-                local players = workspace:FindFirstChild("PLAYERS")
+                local players = getPlayersFolder()
                 if players then
                     setupFolder(players:FindFirstChild("ALIVE"), false)
                     setupFolder(players:FindFirstChild("KILLER"), true)
@@ -1396,7 +1555,7 @@ VisualsBox:AddToggle("NameStamESP", {
             
             espData.nameStamConns = {}
             init()
-            table.insert(espData.nameStamConns, workspace.ChildAdded:Connect(function(c) if c.Name == "PLAYERS" then task.wait(0.5) init() end end))
+			table.insert(espData.nameStamConns, workspace.ChildAdded:Connect(function(c) if c.Name == "PLAYERS" then task.wait(0.5) init() end end))
         else
             if espData.nameStamConns then
                 for _, c in ipairs(espData.nameStamConns) do if c then c:Disconnect() end end
@@ -1411,7 +1570,8 @@ VisualsBox:AddToggle("SurvESP", {
     Text = "Highlight all survivors",
     Default = false,
     Callback = function(Value)
-        local aliveFolder = workspace:FindFirstChild("PLAYERS") and workspace.PLAYERS:FindFirstChild("ALIVE")
+        local p = getPlayersFolder()
+        local aliveFolder = p and p:FindFirstChild("ALIVE")
         if Value and aliveFolder then
             for _, v in ipairs(aliveFolder:GetChildren()) do 
                 if v:IsA("Model") and v ~= LocalPlayer.Character then addESP(espData.survivors, v, getSurvivorColor(v)) end 
@@ -1420,7 +1580,7 @@ VisualsBox:AddToggle("SurvESP", {
                 if v:IsA("Model") and v ~= LocalPlayer.Character then addESP(espData.survivors, v, getSurvivorColor(v)) end 
             end)
             espData.survivorRemove = aliveFolder.ChildRemoved:Connect(function(v) removeESP(espData.survivors, v) end)
-            espData.survivorUpdate = RunService.Heartbeat:Connect(function()
+			espData.survivorUpdate = RunService.Heartbeat:Connect(function()
                 for char, highlight in pairs(espData.survivors) do
                     if char and highlight and char ~= LocalPlayer.Character then 
                         highlight.FillColor = getSurvivorColor(char) 
@@ -1431,7 +1591,7 @@ VisualsBox:AddToggle("SurvESP", {
         else
             if espData.survivorAdd then espData.survivorAdd:Disconnect() end
             if espData.survivorRemove then espData.survivorRemove:Disconnect() end
-            if espData.survivorUpdate then espData.survivorUpdate:Disconnect() end
+			if espData.survivorUpdate then espData.survivorUpdate:Disconnect() end
             clearESP(espData.survivors)
         end
     end
@@ -1442,7 +1602,8 @@ VisualsBox:AddToggle("KillerESP", {
     Default = false,
     Callback = function(Value)
         autoSuppressEnabled = Value
-        local killerFolder = workspace:FindFirstChild("PLAYERS") and workspace.PLAYERS:FindFirstChild("KILLER")
+        local p = getPlayersFolder()
+        local killerFolder = p and p:FindFirstChild("KILLER")
         if Value and killerFolder then
             for _, v in ipairs(killerFolder:GetChildren()) do 
                 if v:IsA("Model") and v ~= LocalPlayer.Character then 
@@ -1469,20 +1630,22 @@ VisualsBox:AddToggle("KillerESP", {
 
 local function isMinionObj(v)
     if not v or not v.Name then return false end
-    local n = v.Name:lower()
-    return n:find("minion") or n:find("ennard") or n:find("stalker") or n:find("baby") or n:find("bidybab") or n:find("bon-bon") or n:find("bonnet")
+    local n = string.lower(v.Name)
+    return string.find(n, "minion", 1, true) or string.find(n, "ennard", 1, true) or string.find(n, "stalker", 1, true) or string.find(n, "baby", 1, true) or string.find(n, "bidybab", 1, true) or string.find(n, "bon-bon", 1, true) or string.find(n, "bonnet", 1, true)
 end
 
 local function isTrapObj(v)
     if not v or not v.Name then return false end
-    local n = v.Name:lower()
+    local n = string.lower(v.Name)
     local inTrapsFolder = false
-    pcall(function()
-        if v.Parent and v.Parent.Name == "Traps" and v.Parent.Parent and v.Parent.Parent.Name == "IGNORE" then
+    local p = v.Parent
+    if p and p.Name == "Traps" then
+        local pp = p.Parent
+        if pp and pp.Name == "IGNORE" then
             inTrapsFolder = true
         end
-    end)
-    return inTrapsFolder or n:find("trap") or n:find("beartrap") or n:find("bear trap") or n:find("springtrap") or n:find("tripwire") or n:find("mine") or n:find("sensor")
+    end
+    return inTrapsFolder or string.find(n, "trap") or string.find(n, "beartrap") or string.find(n, "bear trap") or string.find(n, "springtrap") or string.find(n, "tripwire") or string.find(n, "mine") or string.find(n, "sensor")
 end
 
 VisualsBox:AddToggle("MinionESP", {
@@ -1492,6 +1655,10 @@ VisualsBox:AddToggle("MinionESP", {
         if Value then
             local function checkAndAddMinion(v)
                 if not v or v == LocalPlayer.Character then return end
+                if not activeKillerRole or not activeKillerRole:lower():find("ennard") then 
+                    if espData.minions[v] then removeESP(espData.minions, v) end
+                    return 
+                end
                 if not (v:IsA("Model") or v:IsA("BasePart")) then return end
                 if isMinionObj(v) then
                     if v:IsA("BasePart") and v.Parent and isMinionObj(v.Parent) then return end
@@ -1553,6 +1720,10 @@ VisualsBox:AddToggle("TrapESP", {
 
             local function checkAndAddTrap(v)
                 if not v or v == LocalPlayer.Character then return end
+                if not activeKillerRole or not activeKillerRole:lower():find("springtrap") then
+                    if espData.traps[v] then removeESP(espData.traps, v) end
+                    return 
+                end
                 if not (v:IsA("Model") or v:IsA("BasePart")) then return end
                 if isTrapObj(v) then
                     if v:IsA("BasePart") and v.Parent and isTrapObj(v.Parent) then return end
@@ -1596,33 +1767,76 @@ VisualsBox:AddToggle("GenESP", {
                 if v:IsA("Model") and v.Name == "Generator" then 
                     addESP(espData.generators, v, Color3.fromRGB(255, 255, 0), Color3.fromRGB(255, 255, 255)) 
                     
-                    task.spawn(function()
-                        local completed = false
-                        while espData.generators[v] and not completed do
-                            local isDone = false
-                            if v:GetAttribute("Completed") == true or v:GetAttribute("Repaired") == true or v.Name:lower():find("complete") then
-                                isDone = true
-                            end
-                            
-                            if not isDone then
-                                for _, child in ipairs(v:GetDescendants()) do
-                                    if (child:IsA("PointLight") and child.Enabled and child.Color.G > child.Color.R) or 
-                                       (child:IsA("Sound") and child.Name:lower():find("complete") and child.Playing) then
-                                        isDone = true
-                                        break
-                                    end
-                                end
-                            end
+                    -- Progress ESP Logic
+                    if not espData.genBills[v] then
+                        local bill = Ins("BillboardGui")
+                        bill.Name = "GenProgressESP"
+                        bill.Adornee = v.PrimaryPart or v:FindFirstChildWhichIsA("BasePart")
+                        bill.Size = U2(0, 100, 0, 18)
+                        bill.StudsOffset = V3(0, 3, 0)
+                        bill.AlwaysOnTop = true
+                        bill.MaxDistance = 250
+                        bill.Parent = TargetGUI
 
-                            if isDone then
-                                completed = true
-                                local restorer = getClosestSurvivorName(v:GetPivot().Position)
-                                Library:Notify("[" .. restorer .. "] Has Restored a Generator!", 5)
+                        local barBg = Ins("Frame", bill)
+                        barBg.AnchorPoint = Vector2.new(0.5, 0.5)
+                        barBg.Position = U2(0.5, 0, 0.5, 0)
+                        barBg.BackgroundColor3 = C3(40, 40, 40)
+                        barBg.BorderSizePixel = 0
+                        barBg.Size = U2(0, 90, 0, 12)
+
+                        local barFill = Ins("Frame", barBg)
+                        barFill.BorderSizePixel = 0
+                        barFill.Size = U2(0, 0, 1, 0)
+                        barFill.BackgroundColor3 = getGenColor(0)
+
+                        local lbl = Ins("TextLabel", barBg)
+                        lbl.Size = U2(1, 0, 1, 0)
+                        lbl.BackgroundTransparency = 1
+                        lbl.Font = Enum.Font.GothamBold
+                        lbl.TextSize = 9
+                        lbl.TextStrokeTransparency = 0
+                        lbl.Text = "0%"
+                        lbl.TextColor3 = C3(255, 255, 255)
+                        lbl.ZIndex = 3
+
+                        local function updateProg()
+                            if not v or not v.Parent then return end
+                            local prog = v:GetAttribute("Progress") or 0
+                            lbl.Text = prog .. "%"
+                            local c = getGenColor(prog)
+                            barFill.Size = U2(prog / 100, 0, 1, 0)
+                            barFill.BackgroundColor3 = c
+                        end
+
+                        local function updateProg()
+                            if not v or not v.Parent then return end
+                            local prog = v:GetAttribute("Progress") or 0
+                            lbl.Text = prog .. "%"
+                            local c = getGenColor(prog)
+                            barFill.Size = U2(prog / 100, 0, 1, 0)
+                            barFill.BackgroundColor3 = c
+                            
+                            if prog >= 100 or v:GetAttribute("Completed") == true or v:GetAttribute("Repaired") == true then
+                                if espData.genBills[v] then
+                                    pcall(function()
+                                        espData.genBills[v].bill:Destroy()
+                                        if espData.genBills[v].conn then espData.genBills[v].conn:Disconnect() end
+                                        if espData.genBills[v].cConn then espData.genBills[v].cConn:Disconnect() end
+                                        if espData.genBills[v].rConn then espData.genBills[v].rConn:Disconnect() end
+                                    end)
+                                    espData.genBills[v] = nil
+                                end
                                 removeESP(espData.generators, v)
                             end
-                            task.wait(0.5)
                         end
-                    end)
+
+                        local conn = v:GetAttributeChangedSignal("Progress"):Connect(updateProg)
+                        local cConn = v:GetAttributeChangedSignal("Completed"):Connect(updateProg)
+                        local rConn = v:GetAttributeChangedSignal("Repaired"):Connect(updateProg)
+                        updateProg()
+                        espData.genBills[v] = { bill = bill, conn = conn, cConn = cConn, rConn = rConn }
+                    end
                 end
             end
 
@@ -1634,11 +1848,25 @@ VisualsBox:AddToggle("GenESP", {
             end)
             espData.genRemove = workspace.DescendantRemoving:Connect(function(v)
                 if espData.generators[v] then removeESP(espData.generators, v) end
+                if espData.genBills[v] then
+                    pcall(function()
+                        espData.genBills[v].bill:Destroy()
+                        espData.genBills[v].conn:Disconnect()
+                    end)
+                    espData.genBills[v] = nil
+                end
             end)
         else
             if espData.genAdd then espData.genAdd:Disconnect() end
             if espData.genRemove then espData.genRemove:Disconnect() end
             clearESP(espData.generators)
+            for v, data in pairs(espData.genBills) do
+                pcall(function()
+                    data.bill:Destroy()
+                    data.conn:Disconnect()
+                end)
+            end
+            table.clear(espData.genBills)
         end
     end
 })
@@ -1660,7 +1888,7 @@ VisualsBox:AddToggle("FuseESP", {
                              local completed = false
                              while espData.fuses[v] and not completed do
                                  local isDone = false
-                                 if v:GetAttribute("Completed") == true or v:GetAttribute("Repaired") == true then
+                                 if v:GetAttribute("Inserted") == true then
                                      isDone = true
                                  end
                                  if not isDone then
@@ -1689,7 +1917,7 @@ VisualsBox:AddToggle("FuseESP", {
              local fuseBoxes = gameMap and gameMap:FindFirstChild("FuseBoxes")
              if fuseBoxes then
                  for _, v in ipairs(fuseBoxes:GetChildren()) do
-                     checkAndAdd(v)
+                     addESP(espData.fuses, v, Color3.fromRGB(255, 20, 147), Color3.fromRGB(255, 165, 0))
                  end
              end
             
@@ -1792,7 +2020,6 @@ VisualsBox:AddToggle("DoorHits", {
     end
 })
 
--- Combat Tab
 local CombatBox = Tabs.Combat:AddLeftGroupbox("Aimbot & Parry")
 local aimbotConn = nil
 local aimbotEnabledState = false
@@ -1831,114 +2058,106 @@ CombatBox:AddToggle("CombatSilentAim", {
     end
 })
 
-local autoParryEnabled = false
-local autoParryRadius = 10
-local autoParryDelay = 0.1
-local parryConns = {}
-
-local killerSwingSounds = {
-    ["110440119952050"] = true,
-    ["120953752337955"] = true,
-    ["98744302864116"] = true,
-    ["112503015929213"] = true,
-    ["113286736276764"] = true,
-    ["119509125569226"] = true,
-    ["139612605269329"] = true,
-}
-
-local function isSwingSound(soundObj)
-    if not soundObj then return false end
-    local name = soundObj.Name:lower()
-    -- Dynamic Check via Name (works for SwingSFX, AxelessSwing, etc.)
-    if name:find("swing") or name:find("slash") or name:find("attack") or name:find("hit") then
-        return true
+CombatBox:AddToggle("SilentAimPrediction", {
+    Text = "Enable Prediction",
+    Default = false,
+    Callback = function(Value)
+        silentAimPrediction = Value
     end
-    -- Fallback via ID
-    local id = tostring(soundObj.SoundId):match("%d+")
-    return id and killerSwingSounds[id]
-end
+})
 
-local function tryParry(killerChar)
-    if not autoParryEnabled then return end
-    local char = LocalPlayer.Character
-    
-    if char and char.Parent and char.Parent.Name == "KILLER" then return end
-    if getRoleLabel(char) ~= "Fighter" then return end
-    
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    local killerRoot = killerChar and killerChar:FindFirstChild("HumanoidRootPart")
-    if root and killerRoot then
-        local distance = (root.Position - killerRoot.Position).Magnitude
-        
-        if distance <= autoParryRadius then
-            task.spawn(function()
-                if autoParryDelay > 0 then
-                    task.wait(autoParryDelay)
-                end
-                pcall(function() game:GetService("VirtualInputManager"):SendKeyEvent(true, Enum.KeyCode.E, false, game) end)
-                task.wait(0.05)
-                pcall(function() game:GetService("VirtualInputManager"):SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
-            end)
+CombatBox:AddDropdown("ProjectilePresets", {
+    Values = { "Instant / Melee", "Fast Projectile (Gun)", "Medium (Throw)", "Slow (Projectile)" },
+    Default = 1,
+    Text = "Projectile Presets",
+    Callback = function(Value)
+        if Value == "Instant / Melee" then
+            Options.ProjectileSpeed:SetValue(5000)
+            Options.PredictionScale:SetValue(0.5) -- Small lead for melee
+        elseif Value == "Fast Projectile (Gun)" then
+            Options.ProjectileSpeed:SetValue(1500)
+            Options.PredictionScale:SetValue(1.0)
+        elseif Value == "Medium (Throw)" then
+            Options.ProjectileSpeed:SetValue(500)
+            Options.PredictionScale:SetValue(1.0)
+        elseif Value == "Slow (Projectile)" then
+            Options.ProjectileSpeed:SetValue(100)
+            Options.PredictionScale:SetValue(1.0)
         end
+    end,
+})
+
+CombatBox:AddSlider("PredictionScale", {
+    Text = "Prediction Scale",
+    Default = 1.0,
+    Min = 0,
+    Max = 3,
+    Rounding = 2,
+    Callback = function(Value)
+        predictionVelocityScale = Value
     end
-end
+})
+
+CombatBox:AddSlider("ProjectileSpeed", {
+    Text = "Projectile Speed",
+    Default = 750,
+    Min = 1,
+    Max = 5000,
+    Rounding = 0,
+    Callback = function(Value)
+        predictionProjectileSpeed = Value
+    end
+})
+
+
+
+local autoParryEnabled = false
+local autoParryRadius = 15
+local parryConns = {}
+local VIM = game:GetService("VirtualInputManager")
+
+
 
 local function setupKillerParryDetection(killerChar)
-    local function parseParryTrigger(desc)
-        if desc:IsA("Highlight") and (desc.Name == "Highlight" or desc.Name == "HIGHLIGHT") then
-            local function checkParry()
-                if desc.Enabled and autoParryEnabled then
-                    local rFill, gFill, bFill = math.floor(desc.FillColor.R*255), math.floor(desc.FillColor.G*255), math.floor(desc.FillColor.B*255)
-                    if rFill >= 250 and gFill <= 10 and bFill <= 10 then 
-                        tryParry(killerChar)
-                    end
-                end
+    if not killerChar then return end
+    
+    local function doParry()
+        local char = LocalPlayer.Character
+        if not char or getRoleLabel(char) ~= "Fighter" then return end
+        
+        local root = char:FindFirstChild("HumanoidRootPart")
+        local killerRoot = killerChar:FindFirstChild("HumanoidRootPart")
+        if root and killerRoot then
+            if (root.Position - killerRoot.Position).Magnitude <= autoParryRadius then
+                VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
             end
-            checkParry()
-            table.insert(parryConns, desc:GetPropertyChangedSignal("Enabled"):Connect(checkParry))
-            table.insert(parryConns, desc:GetPropertyChangedSignal("FillColor"):Connect(checkParry))
-        elseif desc:IsA("Animator") then
-            table.insert(parryConns, desc.AnimationPlayed:Connect(function(track)
-                local name = track.Animation and track.Animation.Name and track.Animation.Name:lower() or ""
-                if name:find("swing") or name:find("slash") or name:find("attack") or name:find("hit") or name:find("chop") then
-                    tryParry(killerChar)
-                end
-            end))
-        elseif desc:IsA("Sound") then
-            table.insert(parryConns, desc.Played:Connect(function()
-                if isSwingSound(desc) then
-                    tryParry(killerChar)
-                end
-            end))
-            table.insert(parryConns, desc:GetPropertyChangedSignal("Playing"):Connect(function()
-                if desc.Playing and isSwingSound(desc) then
-                    tryParry(killerChar)
-                end
-            end))
         end
     end
 
-    for _, desc in ipairs(killerChar:GetDescendants()) do
-        parseParryTrigger(desc)
-    end
-    table.insert(parryConns, killerChar.DescendantAdded:Connect(parseParryTrigger))
+    table.insert(parryConns, killerChar:GetAttributeChangedSignal("MMS"):Connect(function()
+        if killerChar:GetAttribute("MMS") == 1 then
+            doParry()
+        end
+    end))
 end
 
 CombatBox:AddToggle("AutoParry", {
-    Text = "Auto-Parry (All-In-One Detection)",
+    Text = "Auto-Parry (Anim & Sound)",
     Default = false,
     Callback = function(Value)
         autoParryEnabled = Value
         if Value then
-            local aliveFolder = workspace:FindFirstChild("PLAYERS") and workspace.PLAYERS:FindFirstChild("KILLER")
-            if aliveFolder then
-                for _, k in ipairs(aliveFolder:GetChildren()) do
+            local p = getPlayersFolder()
+            local killerFolder = p and p:FindFirstChild("KILLER")
+            if killerFolder then
+                for _, k in ipairs(killerFolder:GetChildren()) do
                     setupKillerParryDetection(k)
                 end
-                table.insert(parryConns, aliveFolder.ChildAdded:Connect(setupKillerParryDetection))
+                table.insert(parryConns, killerFolder.ChildAdded:Connect(setupKillerParryDetection))
             end
         else
-            for _, conn in ipairs(parryConns) do if conn then conn:Disconnect() end end
+            for _, conn in ipairs(parryConns) do if conn and conn.Disconnect then conn:Disconnect() end end
             table.clear(parryConns)
         end
     end
@@ -1946,7 +2165,7 @@ CombatBox:AddToggle("AutoParry", {
 
 CombatBox:AddSlider("ParryRadius", {
     Text = "Auto-Parry Radius",
-    Default = 10,
+    Default = 15,
     Min = 5,
     Max = 17,
     Rounding = 0,
@@ -1956,19 +2175,8 @@ CombatBox:AddSlider("ParryRadius", {
     end
 })
 
-CombatBox:AddSlider("ParryDelay", {
-    Text = "Auto-Parry Delay",
-    Default = 0,
-    Min = 0,
-    Max = 5,
-    Rounding = 2,
-    Suffix = "s",
-    Callback = function(Value)
-        autoParryDelay = Value
-    end
-})
 
--- Anti-Lag Tab
+
 local AntiLagBox = Tabs.AntiLag:AddLeftGroupbox("FPS Optimizations")
 AntiLagBox:AddToggle("MazesLowGFX", {
     Text = "MAZES LOW GFX OPTIMIZER MORE FPS!",
@@ -2071,7 +2279,7 @@ AntiLagBox:AddToggle("LowRenderAvatars", {
     end
 })
 
--- Other Scripts Tab
+
 local OtherScriptsBox = Tabs.Other:AddLeftGroupbox("External Hubs")
 OtherScriptsBox:AddButton({
     Text = "Infinite Yield",
@@ -2092,7 +2300,7 @@ OtherScriptsBox:AddButton({
     end
 })
 
--- UI Settings Tab
+
 local MenuGroup = Tabs.UISettings:AddLeftGroupbox("Menu")
 MenuGroup:AddToggle("KeybindMenuOpen", {
     Default = Library.KeybindFrame.Visible,
@@ -2135,7 +2343,7 @@ end)
 
 Library.ToggleKeybind = Options.MenuKeybind
 
--- Setup LinoriaLib Managers
+
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
 SaveManager:IgnoreThemeSettings()
@@ -2147,7 +2355,7 @@ ThemeManager:ApplyToTab(Tabs.UISettings)
 SaveManager:LoadAutoloadConfig()
 
 
--- Define Unload function and hook it
+
 getgenv().RepzHubUnload = function()
     pcall(function()
         if espData then
@@ -2157,16 +2365,11 @@ getgenv().RepzHubUnload = function()
         end
     end)
     
-    for _, tbl in pairs({espData.survivors, espData.killers, espData.generators, espData.batteries, espData.fuses, espData.minions, espData.traps, espData.doors}) do
+    for _, tbl in pairs({espData.survivors, espData.killers, espData.generators, espData.batteries, espData.fuses, espData.minions, espData.traps}) do
         table.clear(tbl)
     end
 
     pcall(function()
-        if type(hookedACFunctions) == "table" then
-            for orig, hook in pairs(hookedACFunctions) do
-                hookfunction(orig, hook)
-            end
-        end
 
         local function clean(c) if c then c:Disconnect() end end
         if activeEmoteTrack then activeEmoteTrack:Stop() end
@@ -2180,7 +2383,7 @@ getgenv().RepzHubUnload = function()
         if autoKillConn then autoKillConn:Disconnect() end
         if autoShakeConn then autoShakeConn:Disconnect() end
 
-        -- Instant Prompts Cleanup
+
         if instantPromptConn then instantPromptConn:Disconnect() end
         for _, obj in pairs(workspace:GetDescendants()) do
             if obj:IsA("ProximityPrompt") then
@@ -2191,7 +2394,8 @@ getgenv().RepzHubUnload = function()
 
         if sprintConn then sprintConn:Disconnect() end
         if charAddConn then charAddConn:Disconnect() end
-        if noclipConn then noclipConn:Disconnect() end
+        if noclipTask then noclipTask:Disconnect() end
+        if noclipCharAdd then noclipCharAdd:Disconnect() end
         if pcFlyConn then pcFlyConn:Disconnect() end
         if mobileFlyConn then mobileFlyConn:Disconnect() end
         
@@ -2214,6 +2418,103 @@ getgenv().RepzHubUnload = function()
         Lighting.GlobalShadows = true
         local cam = Workspace.CurrentCamera
         if cam and cam:FindFirstChild("RepzFBLight") then cam.RepzFBLight:Destroy() end
+        
+        if espData.survivorAdd then espData.survivorAdd:Disconnect() end
+        if espData.survivorRemove then espData.survivorRemove:Disconnect() end
+        if espData.killerAdd then espData.killerAdd:Disconnect() end
+        if espData.killerRemove then espData.killerRemove:Disconnect() end
+        if espData.genAdd then espData.genAdd:Disconnect() end
+        if espData.genRemove then espData.genRemove:Disconnect() end
+        if espData.batAdd then espData.batAdd:Disconnect() end
+        if espData.batRemove then espData.batRemove:Disconnect() end
+        if espData.fuseAdd then espData.fuseAdd:Disconnect() end
+        if espData.minionAdd then espData.minionAdd:Disconnect() end
+        if espData.minionRemove then espData.minionRemove:Disconnect() end
+        if espData.trapAdd then espData.trapAdd:Disconnect() end
+        if espData.trapRemove then espData.trapRemove:Disconnect() end
+        
+        if suppressConns then
+            for _, c in ipairs(suppressConns) do if c then c:Disconnect() end end
+            table.clear(suppressConns)
+        end
+        
+        for _, tbl in pairs({espData.survivors, espData.killers, espData.generators, espData.batteries, espData.fuses, espData.minions, espData.traps}) do
+            for obj, h in pairs(tbl) do pcall(function() h:Destroy() end) end
+            table.clear(tbl)
+        end
+        
+        if type(espData.texts) == "table" then
+            for char, data in pairs(espData.texts) do
+                pcall(function()
+                    if data.gui then data.gui:Destroy() end
+                    if data.conns then 
+                        for _, c in ipairs(data.conns) do 
+                            if c and c.Disconnect then c:Disconnect() end 
+                        end 
+                    end
+                end)
+            end
+            table.clear(espData.texts)
+        end
+        if type(pendingESP) == "table" then table.clear(pendingESP) end
+        if type(espData.nameStamConns) == "table" then
+            for _, c in ipairs(espData.nameStamConns) do if c then c:Disconnect() end end
+            table.clear(espData.nameStamConns)
+        end
+        if espData.highlightTask then task.cancel(espData.highlightTask) end
+
+        if aimbotConn then aimbotConn:Disconnect() end
+        for _, conn in ipairs(parryConns or {}) do if conn then conn:Disconnect() end end
+        if parryConns then table.clear(parryConns) end
     end)
 end
 
+
+local lastRoundState = false
+RunService.Heartbeat:Connect(function()
+    local currentActive = isRoundActive()
+    
+    -- Update active killer role
+    if currentActive then
+        local k = getActiveKiller()
+        activeKillerRole = k and getRoleLabel(k) or nil
+    else
+        activeKillerRole = nil
+    end
+
+    if currentActive and not lastRoundState then
+        task.spawn(function()
+            task.wait(1.5)
+            local targetToggles = {"SurvESP", "KillerESP", "MinionESP", "TrapESP", "GenESP", "FuseESP", "BatESP", "NameStamESP", "AutoParry"}
+            for _, toggleKey in ipairs(targetToggles) do
+                local t = Toggles[toggleKey]
+                if t and t.Value then
+                    t:SetValue(false)
+                    t:SetValue(true)
+                end
+            end
+        end)
+    end
+    lastRoundState = currentActive
+end)
+
+-- Separate Ennard Facing Connection (RenderStepped for smoothness, but with strict checks)
+RunService.RenderStepped:Connect(function()
+    if silentAimEnabled and isRoundActive() and ennardEHeld and getMyRole() == "Ennard" then
+        local target = getSilentAimTarget()
+        local char = LocalPlayer.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        local tPart = target and (target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart"))
+        if root and tPart then
+            local pos = tPart.Position
+            root.CFrame = CFrame.new(root.Position, Vector3.new(pos.X, root.Position.Y, pos.Z))
+        end
+    end
+end)
+
+
+Library:OnUnload(function()
+    if getgenv().RepzHubUnload then
+        getgenv().RepzHubUnload()
+    end
+end)
