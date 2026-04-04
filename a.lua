@@ -53,9 +53,13 @@ local ennardEHeld = false
 
 local lastTargetTick = 0
 local cachedTarget = nil
+local lastTargetFrame = 0
 
 local function getSilentAimTarget()
-    if tick() - lastTargetTick < 0.03 then return cachedTarget end
+	local now = tick()
+	local frame = RunService:IsRenderStep() and 1 or 0
+	
+    if now - lastTargetTick < 0.03 then return cachedTarget end
     lastTargetTick = tick()
     
     local char = LocalPlayer.Character
@@ -70,6 +74,7 @@ local function getSilentAimTarget()
     
     local closest, dist = nil, 1000
     local cam = workspace.CurrentCamera
+	if not cam then return nil end
     local fovLimit = 0.5
 
     for _, v in ipairs(enemyFolder:GetChildren()) do
@@ -227,26 +232,29 @@ local function shouldRunSilentAim()
     return true
 end
 
+local scriptCache = {}
+local function isSafeScript(s)
+    if not s then return false end
+    if scriptCache[s] ~= nil then return scriptCache[s] end
+    
+    local name = s.Name
+    local res = (name == "CameraModule" or name == "PopperCam" or name == "ZoomController" or name == "BaseCamera" or name == "ControlModule" or (s.Parent and s.Parent.Name == "CameraModule"))
+    scriptCache[s] = res
+    return res
+end
+
 local successHook, errHook = pcall(function()
     local gm = getrawmetatable(game)
     local oldNamecall = gm.__namecall
+    local oldIndex = gm.__index
     setreadonly(gm, false)
     
     gm.__namecall = newcclosure(function(self, ...)
         local method = getnamecallmethod()
         
         if not checkcaller() then
-            if shouldRunSilentAim() and (method == "Raycast" or method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList") then
-                local caller = getcallingscript and getcallingscript()
-                local isCameraClass = false
-                if caller then
-                    local cn = caller.Name
-                    if cn == "CameraModule" or cn == "PopperCam" or cn == "ZoomController" or cn == "BaseCamera" or cn == "ControlModule" or (caller.Parent and caller.Parent.Name == "CameraModule") then
-                        isCameraClass = true
-                    end
-                end
-                
-                if not isCameraClass then
+            if (method == "Raycast" or method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList") then
+                if shouldRunSilentAim() and not isSafeScript(getcallingscript()) then
                     local target = getSilentAimTarget()
                     local tPart = target and (target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart"))
                     if tPart then
@@ -256,7 +264,7 @@ local successHook, errHook = pcall(function()
                             local predictedPos = getPredictedPosition(tPart, origin)
                             args[2] = (predictedPos - origin).Unit * 1000
                             return oldNamecall(self, unpack(args))
-                        elseif method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" then
+                        else
                             local origin = args[1].Origin
                             local predictedPos = getPredictedPosition(tPart, origin)
                             args[1] = Ray.new(origin, (predictedPos - origin).Unit * 1000)
@@ -264,11 +272,8 @@ local successHook, errHook = pcall(function()
                         end
                     end
                 end
-            end
-            
-            if method == "FireServer" or method == "InvokeServer" then
-                local remoteName = tostring(self.Name):lower()
-
+            elseif (method == "FireServer" or method == "InvokeServer") then
+                local remoteName = self.Name
                 if shouldRunSilentAim() and (remoteName:find("swing") or remoteName:find("throw") or remoteName:find("attack")) then
                     local target = getSilentAimTarget()
                     local tPart = target and (target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart"))
@@ -278,7 +283,8 @@ local successHook, errHook = pcall(function()
                         local origin = char and char:FindFirstChild("HumanoidRootPart") and char.HumanoidRootPart.Position or Camera.CFrame.Position
                         local predictedPos = getPredictedPosition(tPart, origin)
                         
-                        for i, v in ipairs(args) do
+                        for i = 1, #args do
+                            local v = args[i]
                             if typeof(v) == "Vector3" then
                                 args[i] = predictedPos
                             elseif typeof(v) == "CFrame" then
@@ -290,34 +296,21 @@ local successHook, errHook = pcall(function()
                 end
             end
         end
-        
         return oldNamecall(self, ...)
     end)
     
-    local oldIndex = gm.__index
     gm.__index = newcclosure(function(self, k)
-        if shouldRunSilentAim() and not checkcaller() and (self == Mouse) then
-            local caller = getcallingscript and getcallingscript()
-            local isCameraClass = false
-            if caller then
-                local cn = caller.Name
-                if cn == "CameraModule" or cn == "PopperCam" or cn == "ZoomController" or cn == "BaseCamera" or cn == "ControlModule" or (caller.Parent and caller.Parent.Name == "CameraModule") then
-                    isCameraClass = true
-                end
-            end
-
-            if not isCameraClass and (k == "Target" or k == "Hit" or k == "UnitRay") then
-                local target = getSilentAimTarget()
-                local tPart = target and (target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart"))
-                if tPart then
-                    local origin = Camera.CFrame.Position
-                    local predictedPos = getPredictedPosition(tPart, origin)
-                    
-                    if k == "Target" then return tPart end
-                    if k == "Hit" then return CFrame.new(predictedPos) end
-                    if k == "UnitRay" then
-                        local dir = (predictedPos - origin).Unit
-                        return Ray.new(origin, dir)
+        if not checkcaller() then
+            if (self == Mouse) and (k == "Target" or k == "Hit" or k == "UnitRay") then
+                if shouldRunSilentAim() and not isSafeScript(getcallingscript()) then
+                    local target = getSilentAimTarget()
+                    local tPart = target and (target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart"))
+                    if tPart then
+                        local origin = Camera.CFrame.Position
+                        local predictedPos = getPredictedPosition(tPart, origin)
+                        if k == "Target" then return tPart end
+                        if k == "Hit" then return CFrame.new(predictedPos) end
+                        if k == "UnitRay" then return Ray.new(origin, (predictedPos - origin).Unit) end
                     end
                 end
             end
@@ -481,13 +474,38 @@ local Options = Library.Options
 local Toggles = Library.Toggles
 local executorName = identifyexecutor and identifyexecutor() or "Unknown Executor"
 
+local function checkCompatibility()
+    local requiredFunctions = {
+        "getrawmetatable", "setreadonly", "newcclosure", "getnamecallmethod", "checkcaller",
+        "hookmetamethod", "identifyexecutor", "getgenv", "getrenv", "getreg", "getgc"
+    }
+    local supported = 0
+    for _, func in ipairs(requiredFunctions) do
+        local exists = false
+        pcall(function()
+            if getfenv()[func] ~= nil or _G[func] ~= nil or (getgenv and getgenv()[func] ~= nil) then
+                exists = true
+            end
+        end)
+        if exists then
+            supported = supported + 1
+        end
+    end
+    return supported, #requiredFunctions
+end
+
+local supportedCount, totalChecks = checkCompatibility()
+local isCompatible = supportedCount >= (totalChecks - 2) -- Allow for some missing non-essential ones
+local statusText = isCompatible and "your executor seems to support our script." or "your executor might have issues with some features."
+
 local Window = Library:CreateWindow({
-    Title = "Bite By Night | Repz Hub",
-    Footer = "version: 1.0",
+    Title = " Repz Hub | BBN ",
+    Footer = "https://discord.gg/2j5F3JGubc for more scripts!",
     Icon = 95816097006870,
     NotifySide = "Right",
     ShowCustomCursor = true,
 })
+
 
 Library:Notify("Repz hub Loaded Successfully.", 4)
 
@@ -495,6 +513,7 @@ local Tabs = {
     Info = Window:AddTab("Info", "user"),
     Fun = Window:AddTab("Fun", "smile"),
     Tasks = Window:AddTab("Tasks", "list"),
+    AutoFarm = Window:AddTab("Auto-Farm", "zap"),
     Local = Window:AddTab("Local", "user"),
     Visuals = Window:AddTab("Visuals", "eye"),
     Combat = Window:AddTab("Combat", "swords"),
@@ -517,12 +536,12 @@ InfoBox:AddButton({
         Library:Notify("Thank you all for supporting me throughout the days and years...", 5)
     end
 })
-InfoBox:AddLabel("Executor Status:\nExecutor you're using: " .. executorName .. "\nWe have ran 12/12 checks, and your executor seems to support our script.", true)
+InfoBox:AddLabel("Executor Status:\nExecutor you're using: " .. executorName .. "\nWe have ran " .. supportedCount .. "/" .. totalChecks .. " checks, and " .. statusText, true)
 
 local hookedACFunctions = {}
 local acKeywords = {"anticheat", "hacker", "kick", "hackerkick", "ban", "exploit", "crash", "detect"}
 
-local SettingsBox = Tabs.UISettings:AddLeftGroupbox("Bypass Options")
+local SettingsBox = Tabs.Info:AddRightGroupbox("Bypass Options")
 SettingsBox:AddToggle("AC_Bypass", {
     Text = "Anti-Cheat Bypass",
     Default = false,
@@ -805,7 +824,6 @@ local function setInstantPrompts(state)
                     obj:SetAttribute("HoldDurationOld", obj.HoldDuration)
                     obj.HoldDuration = 0
                 end
-                -- Some games check for 0 specifically, others use HoldDuration for calculations
                 obj.ClickableDuringHold = true 
             else
                 local old = obj:GetAttribute("HoldDurationOld")
@@ -917,6 +935,274 @@ TasksBox:AddToggle("AutoKill", {
     end,
 })
 
+local AutoFarmBox = Tabs.AutoFarm:AddLeftGroupbox("Auto-Farm")
+
+local function notify2(title, msg)
+    Library:Notify("[" .. title .. "] " .. msg, 3)
+end
+
+local autoEscape = false
+local autoEscapeConn
+
+AutoFarmBox:AddToggle("AutoEscapeToggle", {
+    Text = "Auto Escape",
+    Default = false,
+    Callback = function(state)
+        autoEscape = state
+        local player = game.Players.LocalPlayer
+        if state then
+            notify2("Auto Escape", "Enabled.")
+            local teleported = false
+            autoEscapeConn = game:GetService("RunService").RenderStepped:Connect(function()
+                if teleported or not autoEscape then return end
+                local char = player.Character
+                if not char then return end
+                if not workspace.GAME.CAN_ESCAPE.Value then return end
+                local playersFolder = workspace:FindFirstChild("PLAYERS")
+                if not playersFolder or char.Parent ~= playersFolder:FindFirstChild("ALIVE") then return end
+                local gameMap = workspace.MAPS:FindFirstChild("GAME MAP")
+                if not gameMap then return end
+                local escapes = gameMap:FindFirstChild("Escapes")
+                if not escapes then return end
+                for _,part in pairs(escapes:GetChildren()) do
+                    if part:IsA("BasePart") and part:GetAttribute("Enabled") then
+                        local highlight = part:FindFirstChildOfClass("Highlight")
+                        if highlight and highlight.Enabled then
+                            local root = char:FindFirstChild("HumanoidRootPart")
+                            if root then
+                                teleported = true
+                                root.Anchored = true
+                                char.PrimaryPart.CFrame = part.CFrame
+                                task.delay(1.5, function() if root then root.Anchored = false end end)
+                                task.delay(10, function() teleported = false end)
+                            end
+                        end
+                    end
+                end
+            end)
+        else
+            if autoEscapeConn then autoEscapeConn:Disconnect() end
+            notify2("Auto Escape", "Disabled.")
+        end
+    end,
+})
+
+local autoFarmKillConn = nil
+
+AutoFarmBox:AddToggle("AutoFarmKill", {
+    Text = "Auto-Kill All (Killers Only)",
+    Default = false,
+    Callback = function(Value)
+        if Value then
+            notify2("Auto-Kill", "Enabled.")
+            autoFarmKillConn = RunService.Heartbeat:Connect(function()
+                local char = LocalPlayer.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
+                if not root then return end
+                if not (char.Parent and char.Parent.Name == "KILLER") then return end
+                local closest, dist = nil, math.huge
+                local p = getPlayersFolder()
+                local aliveFolder = p and p:FindFirstChild("ALIVE")
+                if aliveFolder then
+                    for _, v in ipairs(aliveFolder:GetChildren()) do
+                        local hrp = v:FindFirstChild("HumanoidRootPart")
+                        if hrp and v ~= char then
+                            local d = (root.Position - hrp.Position).Magnitude
+                            if d < dist then dist = d; closest = v end
+                        end
+                    end
+                end
+                if closest and closest:FindFirstChild("HumanoidRootPart") then
+                    local targetPos = closest.HumanoidRootPart.Position
+                    local dir = (targetPos - root.Position).Unit
+                    if dist > 6 then
+                        root.CFrame = root.CFrame + (dir * 1.5)
+                    else
+                        root.CFrame = CFrame.lookAt(root.Position, Vector3.new(targetPos.X, root.Position.Y, targetPos.Z))
+                        local tool = char:FindFirstChildOfClass("Tool")
+                        if tool then tool:Activate() end
+                    end
+                end
+            end)
+        else
+            if autoFarmKillConn then autoFarmKillConn:Disconnect() autoFarmKillConn = nil end
+            notify2("Auto-Kill", "Disabled.")
+        end
+    end,
+})
+
+local autoGenEnabled = false
+local autoGenTask = nil
+
+local function instantCompleteGenerator(genModel)
+    local genUI = LocalPlayer.PlayerGui:FindFirstChild("Gen")
+    if genUI then
+        local main = genUI:FindFirstChild("GeneratorMain")
+        local evt = main and main:FindFirstChild("Event")
+        if evt and evt:IsA("RemoteEvent") then
+            for i = 1, 20 do
+                evt:FireServer(true)
+            end
+        end
+    end
+    pcall(function()
+        if genModel and genModel.Parent then
+            genModel:SetAttribute("Progress", 100)
+        end
+    end)
+end
+
+local function findSafeZoneOrExit()
+    local maps = workspace:FindFirstChild("MAPS")
+    local gameMap = maps and maps:FindFirstChild("GAME MAP")
+    if gameMap then
+        local escapes = gameMap:FindFirstChild("Escapes")
+        if escapes then
+            for _, part in pairs(escapes:GetChildren()) do
+                if part:IsA("BasePart") then
+                    return part.CFrame
+                end
+            end
+        end
+        local safeZone = gameMap:FindFirstChild("SafeZone") or gameMap:FindFirstChild("Safe Zone") or gameMap:FindFirstChild("Lobby")
+        if safeZone then
+            local part = safeZone:FindFirstChildWhichIsA("BasePart")
+            if part then return part.CFrame end
+        end
+    end
+    return nil
+end
+
+local function getAllGenerators()
+    local gens = {}
+    local maps = workspace:FindFirstChild("MAPS")
+    if maps then
+        for _, v in ipairs(maps:GetDescendants()) do
+            if v:IsA("Model") and v.Name == "Generator" then
+                local prog = v:GetAttribute("Progress") or 0
+                local done = v:GetAttribute("Completed") or v:GetAttribute("Repaired") or false
+                if not done and prog < 100 then
+                    table.insert(gens, v)
+                end
+            end
+        end
+    end
+    return gens
+end
+
+AutoFarmBox:AddToggle("AutoCompleteGens", {
+    Text = "Auto-Complete All Generators",
+    Default = false,
+    Callback = function(Value)
+        autoGenEnabled = Value
+        if Value then
+            notify2("Auto-Complete Gens", "Enabled. Walking to generators...")
+            if autoGenTask then task.cancel(autoGenTask) end
+            autoGenTask = task.spawn(function()
+                while autoGenEnabled do
+                    local char = LocalPlayer.Character
+                    local root = char and char:FindFirstChild("HumanoidRootPart")
+                    local hum = char and char:FindFirstChildOfClass("Humanoid")
+                    if not root or not hum then task.wait(1) continue end
+
+                    local gens = getAllGenerators()
+                    if #gens == 0 then
+                        notify2("Auto-Complete Gens", "All generators done! Moving to exit.")
+                        local safeCF = findSafeZoneOrExit()
+                        if safeCF and root then
+                            root.CFrame = safeCF * CFrame.new(0, 0, -2)
+                        end
+                        task.wait(5)
+                        continue
+                    end
+
+                    for _, gen in ipairs(gens) do
+                        if not autoGenEnabled then break end
+                        char = LocalPlayer.Character
+                        root = char and char:FindFirstChild("HumanoidRootPart")
+                        hum = char and char:FindFirstChildOfClass("Humanoid")
+                        if not root or not hum then break end
+
+                        local prog = gen:GetAttribute("Progress") or 0
+                        local done = gen:GetAttribute("Completed") or gen:GetAttribute("Repaired") or false
+                        if done or prog >= 100 then continue end
+
+                        local genPart = gen.PrimaryPart or gen:FindFirstChildWhichIsA("BasePart")
+                        if not genPart then continue end
+
+                        local genPos = genPart.Position
+                        local dist = (root.Position - genPos).Magnitude
+
+                        if dist > 5 then
+                            local steps = math.ceil(dist / 10)
+                            for s = 1, steps do
+                                if not autoGenEnabled then break end
+                                char = LocalPlayer.Character
+                                root = char and char:FindFirstChild("HumanoidRootPart")
+                                if not root then break end
+                                local currentDist = (root.Position - genPos).Magnitude
+                                if currentDist <= 5 then break end
+                                local dir = (genPos - root.Position).Unit
+                                root.CFrame = CFrame.new(root.Position + dir * math.min(10, currentDist - 4), genPos)
+                                task.wait(0.05)
+                            end
+                        end
+
+                        task.wait(0.1)
+                        instantCompleteGenerator(gen)
+                        task.wait(0.3)
+
+                        local genUI = LocalPlayer.PlayerGui:FindFirstChild("Gen")
+                        if genUI then
+                            local main = genUI:FindFirstChild("GeneratorMain")
+                            local evt = main and main:FindFirstChild("Event")
+                            if evt and evt:IsA("RemoteEvent") then
+                                for i = 1, 30 do
+                                    evt:FireServer(true)
+                                    task.wait(0.05)
+                                end
+                            end
+                        end
+
+                        task.wait(0.2)
+                    end
+
+                    if autoGenEnabled then
+                        local safeCF = findSafeZoneOrExit()
+                        if safeCF then
+                            char = LocalPlayer.Character
+                            root = char and char:FindFirstChild("HumanoidRootPart")
+                            if root then
+                                local parts = {}
+                                if char then
+                                    for _, p in ipairs(char:GetDescendants()) do
+                                        if p:IsA("BasePart") then
+                                            p.CanCollide = false
+                                            table.insert(parts, p)
+                                        end
+                                    end
+                                end
+                                root.CFrame = safeCF * CFrame.new(0, 0, -1)
+                                task.wait(1)
+                                for _, p in ipairs(parts) do
+                                    if p and p.Parent then p.CanCollide = true end
+                                end
+                            end
+                        end
+                    end
+
+                    task.wait(2)
+                end
+                autoGenTask = nil
+            end)
+        else
+            autoGenEnabled = false
+            if autoGenTask then task.cancel(autoGenTask) autoGenTask = nil end
+            notify2("Auto-Complete Gens", "Disabled.")
+        end
+    end,
+})
+
 local LocalBox = Tabs.Local:AddLeftGroupbox("Player Modifications")
 local sprintConn = nil
 local charAddConn = nil
@@ -944,16 +1230,21 @@ LocalBox:AddToggle("InfStam", {
     Callback = function(Value)
         if Value then
             setStamina();
-            charAddConn = LocalPlayer.CharacterAdded:Connect(function()
-                task.wait(1);
-                setStamina();
-            end);
+            if not charAddConn then
+                charAddConn = LocalPlayer.CharacterAdded:Connect(function()
+                    task.wait(1);
+                    if Toggles.InfStam.Value then
+                        setStamina();
+                    end
+                end);
+            end
         else
             if stamConn then stamConn:Disconnect(); stamConn = nil; end;
             if charAddConn then charAddConn:Disconnect(); charAddConn = nil; end;
         end
     end,
 })
+
 
 LocalBox:AddInput("CustomStam", {
     Default = "",
@@ -2438,6 +2729,11 @@ getgenv().RepzHubUnload = function()
         if autoKillConn then autoKillConn:Disconnect() end
         if autoShakeConn then autoShakeConn:Disconnect() end
 
+		autoEscape = false
+        if autoEscapeConn then autoEscapeConn:Disconnect() autoEscapeConn = nil end
+        if autoFarmKillConn then autoFarmKillConn:Disconnect() autoFarmKillConn = nil end
+        autoGenEnabled = false
+        if autoGenTask then task.cancel(autoGenTask) autoGenTask = nil end
 
         if instantPromptConn then instantPromptConn:Disconnect() end
         for _, obj in pairs(workspace:GetDescendants()) do
@@ -2468,7 +2764,8 @@ getgenv().RepzHubUnload = function()
                 end
             end)
         end
-
+			
+        _G.SnakeGod = false
         if fbLoop then fbLoop:Disconnect() end
         Lighting.GlobalShadows = true
         local cam = Workspace.CurrentCamera
