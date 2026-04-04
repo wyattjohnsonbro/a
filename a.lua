@@ -1761,7 +1761,7 @@ VisualsBox:AddToggle("DoorHits", {
 
                         local txt = gui:FindFirstChildOfClass("TextLabel")
                         if txt then
-                            txt.Text = "[" .. tostring(newBreaks) .. "]"
+                            txt.Text = "(" .. tostring(newBreaks) .. ")"
                         end
 
                         task.wait(0.5)
