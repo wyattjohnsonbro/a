@@ -826,27 +826,32 @@ TasksBox:AddToggle("InstantPromptToggle", {
                 instantPromptConn = true
                 task.spawn(function()
                     while instantPromptEnabled do
-                        for _, obj in ipairs(workspace:GetDescendants()) do
-                            if not instantPromptEnabled then break end
-                            if obj:IsA("ProximityPrompt") and obj.HoldDuration ~= 0 then
-                                obj:SetAttribute("HoldDurationOld", obj.HoldDuration)
-                                obj.HoldDuration = 0
-                                obj.ClickableDuringHold = true 
+                        local folders = {workspace:FindFirstChild("MAPS"), workspace:FindFirstChild("INTERACTABLES"), workspace:FindFirstChild("EQUIPMENT")}
+                        for _, folder in ipairs(folders) do
+                            if folder then
+                                for _, obj in ipairs(folder:GetDescendants()) do
+                                    if not instantPromptEnabled then break end
+                                    if obj:IsA("ProximityPrompt") and obj.HoldDuration ~= 0 then
+                                        obj:SetAttribute("HoldDurationOld", obj.HoldDuration)
+                                        obj.HoldDuration = 0
+                                        obj.ClickableDuringHold = true 
+                                    end
+                                end
                             end
                         end
-                        task.wait(1) -- Scans once per second, much more efficient
+                        task.wait(2)
                     end
                     instantPromptConn = nil
                 end)
             end
         else
             if instantPromptConn then 
-                instantPromptConn:Disconnect() 
                 instantPromptConn = nil 
             end
         end
     end,
 })
+
 
 local dotConn = nil
 TasksBox:AddToggle("PerfectBarricade", {
@@ -1260,7 +1265,12 @@ local function runPoolESP()
         end
     end
 end
+
+local espUpdateTick = 0
 espData.highlightTaskLoop = RunService.Heartbeat:Connect(function()
+    local now = tick()
+    if now - espUpdateTick < 0.05 then return end
+    espUpdateTick = now
     pcall(runPoolESP)
 end)
 
@@ -1313,7 +1323,12 @@ local function runTextESP()
     processTextTable(espData.texts, false)
     processTextTable(espData.genBills, true)
 end
+
+local textUpdateTick = 0
 espData.textTaskLoop = RunService.Heartbeat:Connect(function()
+    local now = tick()
+    if now - textUpdateTick < 0.07 then return end
+    textUpdateTick = now
     pcall(runTextESP)
 end)
 
@@ -1698,7 +1713,15 @@ VisualsBox:AddToggle("MinionESP", {
                     end
                 end
             end
-            for _, v in ipairs(workspace:GetDescendants()) do pcall(checkAndAddMinion, v) end
+            local pPlayers = getPlayersFolder()
+            local kFolder = pPlayers and pPlayers:FindFirstChild("KILLER")
+            if kFolder then
+                for _, v in ipairs(kFolder:GetChildren()) do pcall(checkAndAddMinion, v) end
+            end
+            local maps = workspace:FindFirstChild("MAPS")
+            if maps then
+                for _, v in ipairs(maps:GetDescendants()) do pcall(checkAndAddMinion, v) end
+            end
             espData.minionAdd = workspace.DescendantAdded:Connect(function(v) pcall(checkAndAddMinion, v) end)
             espData.minionRemove = workspace.DescendantRemoving:Connect(function(v)
                 removeESP(espData.minions, v)
@@ -1872,9 +1895,14 @@ VisualsBox:AddToggle("GenESP", {
             for _, v in ipairs(workspace:GetDescendants()) do
                 checkGen(v)
             end
-            espData.genAdd = workspace.DescendantAdded:Connect(function(v)
-                checkGen(v)
-            end)
+
+            local maps = workspace:FindFirstChild("MAPS")
+            if maps then
+                espData.genAdd = workspace.DescendantAdded:Connect(function(v)
+                    checkGen(v)
+                end)
+            end
+
             espData.genRemove = workspace.DescendantRemoving:Connect(function(v)
                 if espData.generators[v] then removeESP(espData.generators, v) end
                 if espData.genBills[v] then
