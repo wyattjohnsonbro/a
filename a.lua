@@ -493,8 +493,7 @@ Library:Notify("Repz hub Loaded Successfully.", 4)
 
 local Tabs = {
     Info = Window:AddTab("Info", "user"),
-	Settings = Window:AddTab("Settings", "settings"),
-    Fun = Window:AddTab("Fun", "smile"),
+    Emotes = Window:AddTab("Emotes", "smile"),
     Tasks = Window:AddTab("Tasks", "list"),
     Local = Window:AddTab("Local", "user"),
     Visuals = Window:AddTab("Visuals", "eye"),
@@ -523,8 +522,7 @@ InfoBox:AddLabel("Executor Status:\nExecutor you're using: " .. executorName .. 
 local hookedACFunctions = {}
 local acKeywords = {"anticheat", "hacker", "kick", "hackerkick", "ban", "exploit", "crash", "detect"}
 
-local SettingsBox = Tabs.Settings:AddLeftGroupbox("Bypass Options")
-
+local SettingsBox = Tabs.UISettings:AddLeftGroupbox("Bypass Options")
 SettingsBox:AddToggle("AC_Bypass", {
     Text = "Anti-Cheat Bypass",
     Default = false,
@@ -584,8 +582,8 @@ end
 
 updateEmoteList()
 
-local EmoteBox = Tabs.Fun:AddLeftGroupbox("Emote Menu")
-EmoteBox:AddDropdown("EmoteSelect", {
+local EmotesBox = Tabs.Emotes:AddLeftGroupbox("Emote Menu")
+EmotesBox:AddDropdown("EmoteSelect", {
     Values = emoteDropdownList,
     Default = 1,
     Multi = false,
@@ -597,7 +595,7 @@ EmoteBox:AddDropdown("EmoteSelect", {
     end,
 })
 
-EmoteBox:AddButton({
+EmotesBox:AddButton({
     Text = "Scan Emotes Folder",
     Func = function()
         updateEmoteList()
@@ -606,7 +604,7 @@ EmoteBox:AddButton({
     end
 })
 
-EmoteBox:AddToggle("PlayEmoteToggle", {
+EmotesBox:AddToggle("PlayEmoteToggle", {
     Text = "Play Emote",
     Default = false,
     Callback = function(Value)
@@ -674,53 +672,6 @@ EmoteBox:AddToggle("PlayEmoteToggle", {
             table.clear(activeEffects)
         end
     end,
-})
-
-local SnakeBox = Tabs.Fun:AddLeftGroupbox("Snake Menu")
-SnakeBox:AddToggle("SnakeGodMode", {
-    Text = "Snake God Mode",
-    Default = false,
-    Callback = function(Value)
-        _G.SnakeGod = Value
-        if Value then
-            local UIS = game:GetService("UserInputService")
-            
-            local function hookGames()
-                for _, t in ipairs(getgc(true)) do
-                    if type(t) == "table"
-                        and rawget(t, "ClassName") == "SnakeGame"
-                        and rawget(t, "CheckForDeath")
-                        and not t._GodHooked
-                    then
-                        local original = t.CheckForDeath
-                        t.CheckForDeath = newcclosure(function(self, ...)
-                            if _G.SnakeGod then
-                                return false
-                            end
-                            return original(self, ...)
-                        end)
-                        t._GodHooked = true
-                    end
-                end
-            end
-
-            hookGames()
-            snakeGodConn = task.spawn(function()
-                while _G.SnakeGod do
-                    hookGames()
-                    task.wait(1)
-                end
-            end)
-        else
-            _G.SnakeGod = false
-        end
-    end
-}):AddKeyPicker("SnakeGodModeKey", {
-    Default = "N",
-    SyncToggleState = true,
-    Mode = "Toggle",
-    Text = "God Mode Keybind",
-    NoUI = false
 })
 
 local TasksBox = Tabs.Tasks:AddLeftGroupbox("Automation")
@@ -1150,8 +1101,7 @@ local espCategories = {
     {name = "minions", tbl = espData.minions, prio = 60},
     {name = "generators", tbl = espData.generators, prio = 200},
     {name = "batteries", tbl = espData.batteries, prio = 300},
-    {name = "fuses", tbl = espData.fuses, prio = 400},
-	{name = "doors", tbl = espData.doors, prio = 250}
+    {name = "fuses", tbl = espData.fuses, prio = 400}
 }
 
 local function runPoolESP()
@@ -1604,7 +1554,6 @@ VisualsBox:AddToggle("NameStamESP", {
             
             espData.nameStamConns = {}
             init()
-			table.insert(espData.nameStamConns, workspace.ChildAdded:Connect(function(c) if c.Name == "PLAYERS" then task.wait(0.5) init() end end))
         else
             if espData.nameStamConns then
                 for _, c in ipairs(espData.nameStamConns) do if c then c:Disconnect() end end
@@ -1629,18 +1578,9 @@ VisualsBox:AddToggle("SurvESP", {
                 if v:IsA("Model") and v ~= LocalPlayer.Character then addESP(espData.survivors, v, getSurvivorColor(v)) end 
             end)
             espData.survivorRemove = aliveFolder.ChildRemoved:Connect(function(v) removeESP(espData.survivors, v) end)
-			espData.survivorUpdate = RunService.Heartbeat:Connect(function()
-                for char, highlight in pairs(espData.survivors) do
-                    if char and highlight and char ~= LocalPlayer.Character then 
-                        highlight.FillColor = getSurvivorColor(char) 
-                        highlight.OutlineColor = getSurvivorColor(char) 
-                    end
-                end
-            end)
         else
             if espData.survivorAdd then espData.survivorAdd:Disconnect() end
             if espData.survivorRemove then espData.survivorRemove:Disconnect() end
-			if espData.survivorUpdate then espData.survivorUpdate:Disconnect() end
             clearESP(espData.survivors)
         end
     end
@@ -2063,8 +2003,6 @@ VisualsBox:AddToggle("DoorHits", {
                 espData.doorConn:Disconnect()
                 espData.doorConn = nil
             end
-
-			clearESP(espData.doors)
         end
     end
 })
@@ -2534,7 +2472,7 @@ RunService.Heartbeat:Connect(function()
     if currentActive and not lastRoundState then
         task.spawn(function()
             task.wait(1.5)
-            local targetToggles = {"SurvESP", "KillerESP", "MinionESP", "TrapESP", "GenESP", "FuseESP", "BatESP", "NameStamESP", "DoorESP", "AutoParry"}
+            local targetToggles = {"SurvESP", "KillerESP", "MinionESP", "TrapESP", "GenESP", "FuseESP", "BatESP", "NameStamESP", "AutoParry"}
             for _, toggleKey in ipairs(targetToggles) do
                 local t = Toggles[toggleKey]
                 if t and t.Value then
