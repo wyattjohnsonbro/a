@@ -493,7 +493,7 @@ Library:Notify("Repz hub Loaded Successfully.", 4)
 
 local Tabs = {
     Info = Window:AddTab("Info", "user"),
-    Emotes = Window:AddTab("Emotes", "smile"),
+    Fun = Window:AddTab("Fun", "smile"),
     Tasks = Window:AddTab("Tasks", "list"),
     Local = Window:AddTab("Local", "user"),
     Visuals = Window:AddTab("Visuals", "eye"),
@@ -582,7 +582,7 @@ end
 
 updateEmoteList()
 
-local EmotesBox = Tabs.Emotes:AddLeftGroupbox("Emote Menu")
+local EmotesBox = Tabs.Fun:AddLeftGroupbox("Emote Menu")
 EmotesBox:AddDropdown("EmoteSelect", {
     Values = emoteDropdownList,
     Default = 1,
@@ -673,6 +673,46 @@ EmotesBox:AddToggle("PlayEmoteToggle", {
         end
     end,
 })
+
+local SnakeBox = Tabs.Fun:AddLeftGroupbox("Snake Menu")
+_G.SnakeGod = false
+local function hookSnakeGod()
+    for _, t in ipairs(getgc(true)) do
+        if type(t) == "table"
+            and rawget(t, "ClassName") == "Game"
+            and rawget(t, "CheckForDeath")
+            and not t._GodHooked
+        then
+            local original = t.CheckForDeath
+            t.CheckForDeath = newcclosure(function(self, ...)
+                if _G.SnakeGod then
+                    return false
+                end
+                return original(self, ...)
+            end)
+            t._GodHooked = true
+        end
+    end
+end
+
+SnakeBox:AddToggle("SnakeGodMode", {
+    Text = "Snake God Mode",
+    Default = false,
+    Callback = function(Value)
+        _G.SnakeGod = Value
+        if Value then
+            hookSnakeGod()
+            task.spawn(function()
+                while _G.SnakeGod do
+                    hookSnakeGod()
+                    task.wait(1)
+                end
+            end)
+        end
+    end
+})
+
+
 
 local TasksBox = Tabs.Tasks:AddLeftGroupbox("Automation")
 local autoRepairEnabled = false
