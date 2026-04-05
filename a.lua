@@ -2412,6 +2412,7 @@ CombatBox:AddToggle("SilentAimPrediction", {
     end
 })
 
+
 CombatBox:AddDropdown("ProjectilePresets", {
     Values = { "Instant / Melee", "Fast Projectile (Gun)", "Medium (Throw)", "Slow (Projectile)" },
     Default = 1,
@@ -2461,18 +2462,30 @@ local autoParryEnabled = false
 local autoParryRadius = 15
 local parryConns = {}
 local VIM = game:GetService("VirtualInputManager")
+local LP = game:GetService("Players").LocalPlayer
 
-
+local parryAnims = {
+    ["rbxassetid://102810363618918"] = true, ["rbxassetid://71147082224885"] = true, 
+    ["rbxassetid://70869035406359"] = true, ["rbxassetid://119495869953586"] = true,
+    ["rbxassetid://133752270724243"] = true, ["rbxassetid://112503015929213"] = true, 
+    ["rbxassetid://109788581549466"] = true, ["rbxassetid://95722006705414"] = true, 
+    ["rbxassetid://106673226682917"] = true, ["rbxassetid://120428956410756"] = true 
+}
 
 local function setupKillerParryDetection(killerChar)
     if not killerChar then return end
-    
-    local function doParry()
-        local char = LocalPlayer.Character
-        if not char or getRoleLabel(char) ~= "Fighter" then return end
+
+    local killerRoot = killerChar:WaitForChild("HumanoidRootPart", 5)
+    local animator = killerChar:FindFirstChildWhichIsA("Animator", true)
+
+    local function checkAndParry(track)
+        if not autoParryEnabled then return end
         
-        local root = char:FindFirstChild("HumanoidRootPart")
-        local killerRoot = killerChar:FindFirstChild("HumanoidRootPart")
+        if not parryAnims[track.Animation.AnimationId] then return end
+
+        local char = LP.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        
         if root and killerRoot then
             if (root.Position - killerRoot.Position).Magnitude <= autoParryRadius then
                 VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
@@ -2481,15 +2494,22 @@ local function setupKillerParryDetection(killerChar)
         end
     end
 
-    table.insert(parryConns, killerChar:GetAttributeChangedSignal("MMS"):Connect(function()
-        if killerChar:GetAttribute("MMS") == 1 then
-            doParry()
+    if animator then
+        table.insert(parryConns, animator.AnimationPlayed:Connect(checkAndParry))
+    end
+end
+
+local function onKillerAdded(k)
+    task.spawn(function()
+        local animator = k:FindFirstChildWhichIsA("Animator", true) or k:WaitForChild("Animator", 5)
+        if animator then
+            setupKillerParryDetection(k)
         end
-    end))
+    end)
 end
 
 CombatBox:AddToggle("AutoParry", {
-    Text = "Auto-Parry (Anim & Sound)",
+    Text = "Auto Parry",
     Default = false,
     Callback = function(Value)
         autoParryEnabled = Value
@@ -2498,12 +2518,12 @@ CombatBox:AddToggle("AutoParry", {
             local killerFolder = p and p:FindFirstChild("KILLER")
             if killerFolder then
                 for _, k in ipairs(killerFolder:GetChildren()) do
-                    setupKillerParryDetection(k)
+                    onKillerAdded(k)
                 end
-                table.insert(parryConns, killerFolder.ChildAdded:Connect(setupKillerParryDetection))
+                table.insert(parryConns, killerFolder.ChildAdded:Connect(onKillerAdded))
             end
         else
-            for _, conn in ipairs(parryConns) do if conn and conn.Disconnect then conn:Disconnect() end end
+            for _, conn in ipairs(parryConns) do if conn.Disconnect then conn:Disconnect() end end
             table.clear(parryConns)
         end
     end
@@ -2518,9 +2538,9 @@ CombatBox:AddSlider("ParryRadius", {
     Suffix = " Studs",
     Callback = function(Value)
         autoParryRadius = Value
+        debugLog("Radius updated to: " .. Value)
     end
 })
-
 
 
 local AntiLagBox = Tabs.AntiLag:AddLeftGroupbox("FPS Optimizations")
@@ -2850,7 +2870,6 @@ RunService.Heartbeat:Connect(function()
     lastRoundState = currentActive
 end)
 
--- Separate Ennard Facing Connection (RenderStepped for smoothness, but with strict checks)
 RunService.RenderStepped:Connect(function()
     if silentAimEnabled and isRoundActive() and ennardEHeld and getMyRole() == "Ennard" then
         local target = getSilentAimTarget()
