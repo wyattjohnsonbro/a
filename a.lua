@@ -1527,9 +1527,11 @@ LocalBox:AddToggle("FlyMobile", {
     end,
 })
 
-local VisualsBox = Tabs.Visuals:AddLeftGroupbox("ESP Features")
+local ESPBox = Tabs.Visuals:AddLeftGroupbox("ESP")
+local VisionBox = Tabs.Visuals:AddRightGroupBox("Vision")
+
 local fbLoop = nil
-VisualsBox:AddToggle("FullBright", {
+VisionBox:AddToggle("FullBright", {
     Text = "Full Brightness",
     Default = false,
     Callback = function(Value)
@@ -2038,7 +2040,7 @@ local function getClosestSurvivorName(pos)
     return closestName
 end
 
-VisualsBox:AddToggle("NameStamESP", {
+ESPBox:AddToggle("NameStamESP", {
     Text = "Name & Stamina ESP",
     Default = false,
     Callback = function(Value)
@@ -2077,7 +2079,7 @@ VisualsBox:AddToggle("NameStamESP", {
     end
 })
 
-VisualsBox:AddToggle("SurvESP", {
+ESPBox:AddToggle("SurvESP", {
     Text = "Highlight all survivors",
     Default = false,
     Callback = function(Value)
@@ -2099,7 +2101,7 @@ VisualsBox:AddToggle("SurvESP", {
     end
 })
 
-VisualsBox:AddToggle("KillerESP", {
+ESPBox:AddToggle("KillerESP", {
     Text = "Detect Killer",
     Default = false,
     Callback = function(Value)
@@ -2150,7 +2152,7 @@ local function isTrapObj(v)
     return inTrapsFolder or string.find(n, "trap") or string.find(n, "beartrap") or string.find(n, "bear trap") or string.find(n, "springtrap") or string.find(n, "tripwire") or string.find(n, "mine") or string.find(n, "sensor")
 end
 
-VisualsBox:AddToggle("MinionESP", {
+ESPBox:AddToggle("MinionESP", {
     Text = "Ennard's minions ESP",
     Default = false,
     Callback = function(Value)
@@ -2202,7 +2204,7 @@ VisualsBox:AddToggle("MinionESP", {
     end
 })
 
-VisualsBox:AddToggle("TrapESP", {
+ESPBox:AddToggle("TrapESP", {
     Text = "Springtrap's bear-trap ESP",
     Default = false,
     Callback = function(Value)
@@ -2281,7 +2283,7 @@ RunService.RenderStepped:Connect(function()
     end
 end)
 
-VisualsBox:AddSlider("FOV", {
+VisionBox:AddSlider("FOV", {
     Text = "Field of View",
     Default = 90,
     Min = 30,
@@ -2293,7 +2295,7 @@ VisualsBox:AddSlider("FOV", {
     end,
 })
 
-VisualsBox:AddToggle("GenESP", {
+ESPBox:AddToggle("GenESP", {
     Text = "Highlight all generators",
     Default = false,
     Callback = function(Value)
@@ -2411,7 +2413,7 @@ VisualsBox:AddToggle("GenESP", {
     end
 })
 
-VisualsBox:AddToggle("FuseESP", {
+ESPBox:AddToggle("FuseESP", {
     Text = "Highlight all fuses",
     Default = false,
     Callback = function(Value)
@@ -2471,7 +2473,7 @@ VisualsBox:AddToggle("FuseESP", {
     end
 })
 
-VisualsBox:AddToggle("BatESP", {
+ESPBox:AddToggle("BatESP", {
     Text = "Highlight all batteries",
     Default = false,
     Callback = function(Value)
@@ -2493,7 +2495,7 @@ VisualsBox:AddToggle("BatESP", {
     end
 })
 
-VisualsBox:AddToggle("DoorHits", {
+ESPBox:AddToggle("DoorHits", {
     Text = "Show hits left on doors",
     Default = false,
     Callback = function(Value)
