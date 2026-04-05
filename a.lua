@@ -2268,15 +2268,28 @@ VisualsBox:AddToggle("TrapESP", {
     end
 })
 
+_G.FOVValue = _G.FOVValue or 90
+_G.FOVEnabled = true
+
+RunService.RenderStepped:Connect(function()
+    if _G.FOVEnabled then
+        local camera = workspace.CurrentCamera
+        if camera then
+            camera.FieldOfViewMode = Enum.FieldOfViewMode.Vertical
+            camera.FieldOfView = _G.FOVValue
+        end
+    end
+end)
+
 VisualsBox:AddSlider("FOV", {
     Text = "Field of View",
     Default = 90,
-    Min = 90,
-    Max = 500,
+    Min = 30,
+    Max = 200, 
     Rounding = 0,
-    Suffix = " FOV",
+    Suffix = "°",
     Callback = function(Value)
-        Workspace.CurrentCamera.FieldOfView = Value
+        _G.FOVValue = Value
     end,
 })
 
