@@ -1528,7 +1528,7 @@ LocalBox:AddToggle("FlyMobile", {
 })
 
 local ESPBox = Tabs.Visuals:AddLeftGroupbox("ESP")
-local VisionBox = Tabs.Visuals:AddRightGroupBox("Vision")
+local VisionBox = Tabs.Visuals:AddRightGroupbox("Vision")
 
 local fbLoop = nil
 VisionBox:AddToggle("FullBright", {
