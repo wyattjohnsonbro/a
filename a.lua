@@ -575,7 +575,10 @@ local storedEmotes = {}
 local emoteDropdownList = {"Select Emote First"}
 local selectedEmoteObj = nil
 local activeEmoteTrack = nil
-local activeEffects = {} 
+local activeEffects = {}
+_G.GameMusicSteppedConnection = nil
+_G.CustomOST_Active = false
+_G.OriginalLobbyMusic = nil 
 
 local function updateEmoteList()
     table.clear(storedEmotes)
@@ -600,6 +603,175 @@ local function updateEmoteList()
 end
 
 updateEmoteList()
+
+local CustomOSTBox = Tabs.Fun:AddLeftGroupbox("Custom OST")
+local storedMusic = {}
+local musicDropdownList = {"Select Music File"}
+local selectedMusicObj = nil
+
+local function updateMusicList()
+    table.clear(storedMusic)
+    musicDropdownList = {"Select Music File"}
+    local soundService = game:GetService("SoundService")
+    local workspace = game:GetService("Workspace")
+
+    local function scanFolder(folder)
+        for _, obj in ipairs(folder:GetDescendants()) do
+            if obj:IsA("Sound") and (obj.Name == "LobbyMusic" or (obj.Parent and obj.Parent.Name == "GAME MAP" and obj.Parent.Parent and obj.Parent.Parent.Name == "MAPS" and obj.Name == "Music") or (obj.Parent and obj.Parent.Name == "Sounds" and obj.Parent.Parent and obj.Parent.Parent.Name == "Assets" and obj.Parent.Parent.Parent and obj.Parent.Parent.Parent.Name == "SnakeGame" and obj.Parent.Parent.Parent.Parent and obj.Parent.Parent.Parent.Parent.Name == "Games" and obj.Parent.Parent.Parent.Parent.Parent and obj.Parent.Parent.Parent.Parent.Parent.Name == "Modules" and obj.Parent.Parent.Parent.Parent.Parent.Parent and obj.Parent.Parent.Parent.Parent.Parent.Parent.Name == "ReplicatedStorage" and obj.Name == "Music") or (obj.Parent and obj.Parent.Name == "ChaseThemes-Killer" and obj.Parent.Parent and obj.Parent.Parent.Name == "KILLER" and obj.Parent.Parent.Parent and obj.Parent.Parent.Parent.Name == "PLAYERS" and obj.Parent.Parent.Parent.Parent and obj.Parent.Parent.Parent.Parent.Name == "workspace") or obj.Name:lower():find("lms") or obj.Name:lower():find("map") or obj.Name:lower():find("chase") or obj.Parent.Name:lower():find("chasethemes") or (obj.Parent and obj.Parent.Name == "Phases" and obj.Parent.Parent and obj.Parent.Parent.Name == "KILLER" and obj.Parent.Parent.Parent and obj.Parent.Parent.Parent.Name == "PLAYERS" and obj.Parent.Parent.Parent.Parent and obj.Parent.Parent.Parent.Parent.Name == "workspace") or (obj.Parent and obj.Parent.Parent and obj.Parent.Parent.Name == "Emotes" and obj.Parent.Parent.Parent and obj.Parent.Parent.Parent.Name == "Modules" and obj.Parent.Parent.Parent.Parent and obj.Parent.Parent.Parent.Parent.Name == "ReplicatedStorage")) then
+                storedMusic[obj.Name] = obj
+                table.insert(musicDropdownList, obj.Name)
+            end
+        end
+    end
+
+    -- Scan SoundService and Workspace for music
+    scanFolder(soundService)
+    scanFolder(workspace)
+
+    if #musicDropdownList == 1 then table.insert(musicDropdownList, "No Music Found") end
+end
+
+updateMusicList()
+
+CustomOSTBox:AddDropdown("MusicSelect", {
+    Values = musicDropdownList,
+    Default = 1,
+    Multi = false,
+    Text = "Select Music",
+    Callback = function(Value)
+        if storedMusic[Value] then
+            selectedMusicObj = storedMusic[Value]
+        end
+    end,
+})
+
+CustomOSTBox:AddInput("MP3Url", {
+    Text = "Direct MP3 URL / Asset ID",
+    Placeholder = "Enter direct MP3 URL or rbxassetid here",
+    Default = "",
+    Callback = function(Value)
+        _G.CustomOST_MP3Url = Value
+    end,
+})
+
+CustomOSTBox:AddButton({
+    Text = "Scan Music Folders",
+    Func = function()
+        updateMusicList()
+        Options.MusicSelect:SetValues(musicDropdownList)
+        Library:Notify("Found " .. tostring(#musicDropdownList - 1) .. " music files!", 3)
+    end
+})
+
+CustomOSTBox:AddButton({
+    Text = "Play Selected / Custom OST",
+    Func = function()
+        local customSoundId = nil
+        if selectedMusicObj then
+            customSoundId = selectedMusicObj.SoundId
+        elseif _G.CustomOST_MP3Url and string.len(_G.CustomOST_MP3Url) > 0 then
+            if _G.CustomOST_MP3Url:match("^rbxassetid://%d+$") then
+                customSoundId = _G.CustomOST_MP3Url
+            elseif _G.CustomOST_MP3Url:match("^https?://.+\.mp3$") then
+                customSoundId = _G.CustomOST_MP3Url
+            else
+                customSoundId = "rbxassetid://" .. (_G.CustomOST_MP3Url:match("%d+") or "")
+            end
+        end
+
+        if customSoundId then
+            -- Stop existing game music
+            for _, sound in ipairs(game:GetService("SoundService"):GetDescendants()) do
+                if sound:IsA("Sound") and (sound.Name:lower():find("lms") or sound.Name:lower():find("map") or sound.Name:lower():find("chase")) then
+                    sound:Stop()
+                end
+            end
+
+            -- Replace SoundId of specific game music objects
+            local lobbyMusic = game:GetService("SoundService"):FindFirstChild("LobbyMusic")
+            local gameMapMusic = workspace:FindFirstChild("MAPS") and workspace.MAPS:FindFirstChild("GAME MAP") and workspace.MAPS["GAME MAP"]:FindFirstChild("Music")
+            local snakeGameMusic = game:GetService("ReplicatedStorage"):FindFirstChild("Modules") and game.ReplicatedStorage.Modules:FindFirstChild("Games") and game.ReplicatedStorage.Modules.Games:FindFirstChild("SnakeGame") and game.ReplicatedStorage.Modules.Games.SnakeGame:FindFirstChild("Assets") and game.ReplicatedStorage.Modules.Games.SnakeGame.Assets:FindFirstChild("Sounds") and game.ReplicatedStorage.Modules.Games.SnakeGame.Assets.Sounds:FindFirstChild("Music")
+            local killerChaseThemesMusic = workspace:FindFirstChild("PLAYERS") and workspace.PLAYERS:FindFirstChild("KILLER") and workspace.PLAYERS.KILLER:FindFirstChild("ChaseThemes-Killer") and workspace.PLAYERS.KILLER["ChaseThemes-Killer"]:FindFirstChild("Music")
+            local killerPhasesMusic = {}
+            local killerFolder = workspace:FindFirstChild("PLAYERS") and workspace.PLAYERS:FindFirstChild("KILLER")
+            if killerFolder then
+                for _, killer in ipairs(killerFolder:GetChildren()) do
+                    local phasesFolder = killer:FindFirstChild("Phases")
+                    if phasesFolder then
+                        for i = 1, 4 do
+                            local phaseMusic = phasesFolder:FindFirstChild(tostring(i))
+                            if phaseMusic and phaseMusic:IsA("Sound") then
+                                table.insert(killerPhasesMusic, phaseMusic)
+                            end
+                        end
+                    end
+                end
+            end
+
+            _G.CustomOST_Active = true
+
+            -- Stop any previously playing custom OST
+            if _G.CustomOST_Sound then
+                _G.CustomOST_Sound:Stop()
+                _G.CustomOST_Sound:Destroy()
+                _G.CustomOST_Sound = nil
+            end
+
+            -- Create and play the new custom OST
+            _G.CustomOST_Sound = Instance.new("Sound")
+            _G.CustomOST_Sound.SoundId = customSoundId
+            _G.CustomOST_Sound.Parent = game:GetService("SoundService")
+            _G.CustomOST_Sound.Looped = true
+            _G.CustomOST_Sound.Volume = 1 -- Ensure custom music is audible
+            _G.CustomOST_Sound:Play()
+
+            -- Setup a loop to constantly mute game music while Custom OST is active
+            if _G.CustomOST_MuteLoop then _G.CustomOST_MuteLoop:Disconnect() end
+            _G.CustomOST_MuteLoop = game:GetService("RunService").Heartbeat:Connect(function()
+                if not _G.CustomOST_Active then
+                    if _G.CustomOST_MuteLoop then _G.CustomOST_MuteLoop:Disconnect() end
+                    return
+                end
+
+                local allGameMusicObjects = {}
+                local lobbyMusic = game:GetService("SoundService"):FindFirstChild("LobbyMusic")
+                local gameMapMusic = workspace:FindFirstChild("MAPS") and workspace.MAPS:FindFirstChild("GAME MAP") and workspace.MAPS["GAME MAP"]:FindFirstChild("Music")
+                local snakeGameMusic = game:GetService("ReplicatedStorage"):FindFirstChild("Modules") and game.ReplicatedStorage.Modules:FindFirstChild("Games") and game.ReplicatedStorage.Modules.Games:FindFirstChild("SnakeGame") and game.ReplicatedStorage.Modules.Games.SnakeGame:FindFirstChild("Assets") and game.ReplicatedStorage.Modules.Games.SnakeGame.Assets:FindFirstChild("Sounds") and game.ReplicatedStorage.Modules.Games.SnakeGame.Assets.Sounds:FindFirstChild("Music")
+                local killerChaseThemesMusic = workspace:FindFirstChild("PLAYERS") and workspace.PLAYERS:FindFirstChild("KILLER") and workspace.PLAYERS.KILLER:FindFirstChild("ChaseThemes-Killer") and workspace.PLAYERS.KILLER["ChaseThemes-Killer"]:FindFirstChild("Music")
+                
+                if lobbyMusic then table.insert(allGameMusicObjects, lobbyMusic) end
+                if gameMapMusic then table.insert(allGameMusicObjects, gameMapMusic) end
+                if snakeGameMusic then table.insert(allGameMusicObjects, snakeGameMusic) end
+                if killerChaseThemesMusic then table.insert(allGameMusicObjects, killerChaseThemesMusic) end
+                
+                local killerFolder = workspace:FindFirstChild("PLAYERS") and workspace.PLAYERS:FindFirstChild("KILLER")
+                if killerFolder then
+                    for _, killer in ipairs(killerFolder:GetChildren()) do
+                        local phasesFolder = killer:FindFirstChild("Phases")
+                        if phasesFolder then
+                            for i = 1, 4 do
+                                local phaseMusic = phasesFolder:FindFirstChild(tostring(i))
+                                if phaseMusic and phaseMusic:IsA("Sound") then
+                                    table.insert(allGameMusicObjects, phaseMusic)
+                                end
+                            end
+                        end
+                    end
+                end
+
+                for _, musicObj in ipairs(allGameMusicObjects) do
+                    if musicObj.Volume > 0 then
+                        musicObj.Volume = 0
+                    end
+                end
+            end)
+
+            Library:Notify("Playing Custom OST! (Game music muted)", 3)
+        else
+            Library:Notify("Error: Please select a music file or enter an MP3 URL/Asset ID first.", 3)
+        end
+    end,
+})
 
 local EmotesBox = Tabs.Fun:AddLeftGroupbox("Emote Menu")
 EmotesBox:AddDropdown("EmoteSelect", {
@@ -987,19 +1159,15 @@ AutoFarmBox:AddToggle("AutoEscapeToggle", {
     end,
 })
 
-local autoFarmKillConn = nil
-
 AutoFarmBox:AddToggle("AutoFarmKill", {
     Text = "Auto-Kill All (Killers Only)",
     Default = false,
     Callback = function(Value)
         if Value then
-            notify2("Auto-Kill", "Enabled.")
-            autoFarmKillConn = RunService.Heartbeat:Connect(function()
+            autoKillConn = RunService.Heartbeat:Connect(function()
                 local char = LocalPlayer.Character
                 local root = char and char:FindFirstChild("HumanoidRootPart")
                 if not root then return end
-                if not (char.Parent and char.Parent.Name == "KILLER") then return end
                 local closest, dist = nil, math.huge
                 local p = getPlayersFolder()
                 local aliveFolder = p and p:FindFirstChild("ALIVE")
@@ -1016,7 +1184,7 @@ AutoFarmBox:AddToggle("AutoFarmKill", {
                     local targetPos = closest.HumanoidRootPart.Position
                     local dir = (targetPos - root.Position).Unit
                     if dist > 6 then
-                        root.CFrame = root.CFrame + (dir * 1.5)
+                        root.CFrame = root.CFrame + (dir * 1.5) 
                     else
                         root.CFrame = CFrame.lookAt(root.Position, Vector3.new(targetPos.X, root.Position.Y, targetPos.Z))
                         local tool = char:FindFirstChildOfClass("Tool")
@@ -1025,8 +1193,7 @@ AutoFarmBox:AddToggle("AutoFarmKill", {
                 end
             end)
         else
-            if autoFarmKillConn then autoFarmKillConn:Disconnect() autoFarmKillConn = nil end
-            notify2("Auto-Kill", "Disabled.")
+            if autoKillConn then autoKillConn:Disconnect() autoKillConn = nil end
         end
     end,
 })
@@ -2101,6 +2268,18 @@ VisualsBox:AddToggle("TrapESP", {
     end
 })
 
+VisualsBox:AddSlider("FOV", {
+    Text = "Field of View",
+    Default = 90,
+    Min = 90,
+    Max = 500,
+    Rounding = 0,
+    Suffix = " FOV",
+    Callback = function(Value)
+        Workspace.CurrentCamera.FieldOfView = Value
+    end,
+})
+
 VisualsBox:AddToggle("GenESP", {
     Text = "Highlight all generators",
     Default = false,
@@ -2459,51 +2638,63 @@ CombatBox:AddSlider("ProjectileSpeed", {
 
 
 local autoParryEnabled = false
-local autoParryRadius = 15
+local autoParryRadius = 15 -- Keep the radius variable
 local parryConns = {}
-local VIM = game:GetService("VirtualInputManager")
-local LP = game:GetService("Players").LocalPlayer
+local WarpInputClient = nil
 
-local parryAnims = {
-    ["rbxassetid://102810363618918"] = true, ["rbxassetid://71147082224885"] = true, 
-    ["rbxassetid://70869035406359"] = true, ["rbxassetid://119495869953586"] = true,
-    ["rbxassetid://133752270724243"] = true, ["rbxassetid://112503015929213"] = true, 
-    ["rbxassetid://109788581549466"] = true, ["rbxassetid://95722006705414"] = true, 
-    ["rbxassetid://106673226682917"] = true, ["rbxassetid://120428956410756"] = true 
-}
-
-local function setupKillerParryDetection(killerChar)
-    if not killerChar then return end
-
-    local killerRoot = killerChar:WaitForChild("HumanoidRootPart", 5)
-    local animator = killerChar:FindFirstChildWhichIsA("Animator", true)
-
-    local function checkAndParry(track)
-        if not autoParryEnabled then return end
-        
-        if not parryAnims[track.Animation.AnimationId] then return end
-
-        local char = LP.Character
-        local root = char and char:FindFirstChild("HumanoidRootPart")
-        
-        if root and killerRoot then
-            if (root.Position - killerRoot.Position).Magnitude <= autoParryRadius then
-                VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-                VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+local function initWarpInputClient()
+    if not WarpInputClient then
+        local ReplicatedStorage = game:GetService("ReplicatedStorage")
+        local Modules = ReplicatedStorage:FindFirstChild("Modules")
+        local WarpModule = Modules and Modules:FindFirstChild("Warp")
+        if WarpModule then
+            local success, result = pcall(function() return require(WarpModule).Client("Input") end)
+            if success and result then
+                WarpInputClient = result
+            else
+                warn("Failed to get Warp.Client(\"Input\"): ", result)
             end
+        else
+            warn("Warp module not found.")
         end
     end
-
-    if animator then
-        table.insert(parryConns, animator.AnimationPlayed:Connect(checkAndParry))
-    end
 end
+
+
 
 local function onKillerAdded(k)
     task.spawn(function()
         local animator = k:FindFirstChildWhichIsA("Animator", true) or k:WaitForChild("Animator", 5)
         if animator then
-            setupKillerParryDetection(k)
+            table.insert(parryConns, animator.AnimationPlayed:Connect(function(track)
+                if autoParryEnabled and WarpInputClient then
+                    local parryAnims = {
+                        ["rbxassetid://102810363618918"] = true, -- Example attack animation ID
+                        ["rbxassetid://71147082224885"] = true,  -- Example attack animation ID
+                        ["rbxassetid://70869035406359"] = true,  -- Example attack animation ID
+                        ["rbxassetid://119495869953586"] = true,
+                        ["rbxassetid://133752270724243"] = true,
+                        ["rbxassetid://112503015929213"] = true,
+                        ["rbxassetid://109788581549466"] = true,
+                        ["rbxassetid://95722006705414"] = true,
+                        ["rbxassetid://106673226682917"] = true,
+                        ["rbxassetid://120428956410756"] = true
+                    }
+
+                    if parryAnims[track.Animation.AnimationId] then
+                        local char = LocalPlayer.Character
+                        local root = char and char:FindFirstChild("HumanoidRootPart")
+                        local killerRoot = k:FindFirstChild("HumanoidRootPart")
+
+                        if root and killerRoot and (root.Position - killerRoot.Position).Magnitude <= autoParryRadius then
+                            -- Trigger parry using the Warp module
+                            WarpInputClient:Fire(true, {"Ability", 2})
+                            -- Add a small debounce to prevent spamming
+                            task.wait(0.5)
+                        end
+                    end
+                end
+            end))
         end
     end)
 end
@@ -2514,13 +2705,19 @@ CombatBox:AddToggle("AutoParry", {
     Callback = function(Value)
         autoParryEnabled = Value
         if Value then
-            local p = getPlayersFolder()
-            local killerFolder = p and p:FindFirstChild("KILLER")
-            if killerFolder then
-                for _, k in ipairs(killerFolder:GetChildren()) do
-                    onKillerAdded(k)
+            initWarpInputClient()
+            if WarpInputClient then
+                local p = getPlayersFolder()
+                local killerFolder = p and p:FindFirstChild("KILLER")
+                if killerFolder then
+                    for _, k in ipairs(killerFolder:GetChildren()) do
+                        onKillerAdded(k)
+                    end
+                    table.insert(parryConns, killerFolder.ChildAdded:Connect(onKillerAdded))
                 end
-                table.insert(parryConns, killerFolder.ChildAdded:Connect(onKillerAdded))
+            else
+                Library:Notify("Warp Input Client not available. Auto Parry may not work.", 5)
+                Options.AutoParry:SetValue(false)
             end
         else
             for _, conn in ipairs(parryConns) do if conn.Disconnect then conn:Disconnect() end end
@@ -2722,6 +2919,9 @@ SaveManager:LoadAutoloadConfig()
 
 
 
+getgenv().CustomOST_MP3Url = ""
+getgenv().CustomOST_Sound = nil
+
 getgenv().RepzHubUnload = function()
     pcall(function()
         if espData then
@@ -2751,7 +2951,6 @@ getgenv().RepzHubUnload = function()
 
 		autoEscape = false
         if autoEscapeConn then autoEscapeConn:Disconnect() autoEscapeConn = nil end
-        if autoFarmKillConn then autoFarmKillConn:Disconnect() autoFarmKillConn = nil end
         autoGenEnabled = false
         if autoGenTask then task.cancel(autoGenTask) autoGenTask = nil end
 
@@ -2787,6 +2986,7 @@ getgenv().RepzHubUnload = function()
 			
         _G.SnakeGod = false
         if fbLoop then fbLoop:Disconnect() end
+        if _G.CustomOST_Sound then _G.CustomOST_Sound:Stop(); _G.CustomOST_Sound:Destroy(); _G.CustomOST_Sound = nil end
         Lighting.GlobalShadows = true
         local cam = Workspace.CurrentCamera
         if cam and cam:FindFirstChild("RepzFBLight") then cam.RepzFBLight:Destroy() end
@@ -2885,7 +3085,17 @@ end)
 
 
 Library:OnUnload(function()
-    if getgenv().RepzHubUnload then
-        getgenv().RepzHubUnload()
-    end
+        if getgenv().RepzHubUnload then
+            getgenv().RepzHubUnload()
+        end
+        if _G.CustomOST_Sound then
+            _G.CustomOST_Sound:Stop()
+            _G.CustomOST_Sound:Destroy()
+            _G.CustomOST_Sound = nil
+        end
+        if _G.CustomOST_MuteLoop then
+            _G.CustomOST_MuteLoop:Disconnect()
+            _G.CustomOST_MuteLoop = nil
+        end
+        _G.CustomOST_Active = false
 end)
