@@ -2540,7 +2540,7 @@ ESPBox:AddToggle("DoorHits", {
                 local breaks = v:GetAttribute("Breaks")
                 if breaks == nil then return end
 
-                -- if breaks > 3 then return end
+                if breaks > 3 then return end
 
                 local gui = addSimpleTextLabel(
                     v,
