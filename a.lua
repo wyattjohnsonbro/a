@@ -2527,7 +2527,7 @@ ESPBox:AddToggle("DoorHits", {
                 local maps = workspace:FindFirstChild("MAPS")
                 local gameMap = maps and maps:FindFirstChild("GAME MAP")
                 local doorsFolder = gameMap and gameMap:FindFirstChild("Doors")
-                local doubleDoorsFolder = gameMap and (gameMap:FindFirstChild("Double Doors") or doorsFolder:FindFirstChild("DoubleDoors"))
+                local doubleDoors = (doorsFolder and doorsFolder:FindFirstChild("Double Doors")) or (gameMap and gameMap:FindFirstChild("Double Doors"))
 				
                 if not (doorsFolder and v:IsDescendantOf(doorsFolder)) then
                     return
