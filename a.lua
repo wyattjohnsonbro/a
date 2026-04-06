@@ -1044,25 +1044,54 @@ TasksBox:AddToggle("InstantPromptToggle", {
 
 
 local dotConn = nil
+local activeLoops = {} -- Keeps track of active tasks to clean up when toggled off
+
 TasksBox:AddToggle("PerfectBarricade", {
     Text = "Perfect Barricade",
     Default = false,
     Callback = function(Value)
         if Value then
             local playerGui = LocalPlayer:WaitForChild("PlayerGui")
-            dotConn = RunService.RenderStepped:Connect(function()
-                local dot = playerGui:FindFirstChild("Dot")
-                if dot and dot:IsA("ScreenGui") and dot.Enabled then
-                    local c = dot:FindFirstChild("Container")
-                    local f = c and c:FindFirstChild("Frame")
-                    if f then
-                        f.AnchorPoint = Vector2.new(0.5, 0.5)
-                        f.Position = UDim2.new(0.5, 0, 0.5, 0)
+            
+            -- Function to handle the centering logic
+            local function handleBarricade(dot)
+                -- Store the loop state in a table so we can stop it if the toggle is turned off
+                activeLoops[dot] = true 
+                
+                task.spawn(function()
+                    while Value and dot and dot.Parent and activeLoops[dot] do
+                        local container = dot:FindFirstChild("Container")
+                        local frame = container and container:FindFirstChild("Frame")
+                        
+                        if frame and dot.Enabled then
+                            frame.AnchorPoint = Vector2.new(0.5, 0.5)
+                            frame.Position = UDim2.new(0.5, 0, 0.5, 0)
+                        end
+                        task.wait()
                     end
+                end)
+            end
+
+            -- 1. Catch existing Dots
+            for _, child in ipairs(playerGui:GetDescendants()) do
+                if child.Name == "Dot" then
+                    handleBarricade(child)
+                end
+            end
+
+            -- 2. Catch new Dots added later
+            dotConn = playerGui.DescendantAdded:Connect(function(descendant)
+                if descendant.Name == "Dot" then
+                    handleBarricade(descendant)
                 end
             end)
         else
-            if dotConn then dotConn:Disconnect() dotConn = nil end
+            -- Cleanup
+            if dotConn then 
+                dotConn:Disconnect() 
+                dotConn = nil 
+            end
+            activeLoops = {} -- Clears all running while loops
         end
     end,
 })
@@ -2498,6 +2527,7 @@ ESPBox:AddToggle("DoorHits", {
                 local maps = workspace:FindFirstChild("MAPS")
                 local gameMap = maps and maps:FindFirstChild("GAME MAP")
                 local doorsFolder = gameMap and gameMap:FindFirstChild("Doors")
+                local doubleDoorsFolder = gameMap and (gameMap:FindFirstChild("Double Doors") or doorsFolder:FindFirstChild("DoubleDoors"))
 				
                 if not (doorsFolder and v:IsDescendantOf(doorsFolder)) then
                     return
@@ -2509,6 +2539,8 @@ ESPBox:AddToggle("DoorHits", {
 
                 local breaks = v:GetAttribute("Breaks")
                 if breaks == nil then return end
+
+                -- if breaks > 3 then return end
 
                 local gui = addSimpleTextLabel(
                     v,
