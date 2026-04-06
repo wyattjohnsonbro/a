@@ -1378,36 +1378,30 @@ local customStaminaAmount = math.huge
 local stamConn = nil
 
 local function setStamina()
-    if stamConn then stamConn:Disconnect(); stamConn = nil; end;
-    local char = LocalPlayer.Character;
-    if not char then return end;
+    if stamConn then stamConn:Disconnect(); stamConn = nil; end
     stamConn = RunService.Heartbeat:Connect(function()
-        local c = LocalPlayer.Character;
-        if not c then return end;
-        local mx = c:GetAttribute("MaxStamina") or 100;
-        if (c:GetAttribute("Stamina") or mx) < mx then
-            c:SetAttribute("Stamina", mx);
-        end;
-    end);
-end;
+        local char = LocalPlayer.Character
+        if not char then return end
+        local mx = char:GetAttribute("MaxStamina") or 100
+        char:SetAttribute("Stamina", mx)
+    end)
+end
 
 LocalBox:AddToggle("InfStam", {
     Text = "Infinite Stamina",
     Default = false,
     Callback = function(Value)
         if Value then
-            setStamina();
+            setStamina()
             if not charAddConn then
                 charAddConn = LocalPlayer.CharacterAdded:Connect(function()
-                    task.wait(1);
-                    if Toggles.InfStam.Value then
-                        setStamina();
-                    end
-                end);
+                    task.wait(1)
+                    if Toggles.InfStam.Value then setStamina() end
+                end)
             end
         else
-            if stamConn then stamConn:Disconnect(); stamConn = nil; end;
-            if charAddConn then charAddConn:Disconnect(); charAddConn = nil; end;
+            if stamConn then stamConn:Disconnect(); stamConn = nil; end
+            if charAddConn then charAddConn:Disconnect(); charAddConn = nil; end
         end
     end,
 })
