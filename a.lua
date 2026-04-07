@@ -57,7 +57,6 @@ local lastTargetFrame = 0
 
 local function getSilentAimTarget()
 	local now = tick()
-	local frame = RunService:IsRenderStep() and 1 or 0
 	
     if now - lastTargetTick < 0.03 then return cachedTarget end
     lastTargetTick = tick()
@@ -72,19 +71,22 @@ local function getSilentAimTarget()
     local enemyFolder = pFolder and pFolder:FindFirstChild(teamFolder)
     if not enemyFolder then cachedTarget = nil return nil end
     
-    local closest, dist = nil, 1000
     local cam = workspace.CurrentCamera
 	if not cam then return nil end
-    local fovLimit = 0.5
+
+    -- FOV-based targeting: pick the enemy whose HRP is closest to the screen center
+    local viewportSize = cam.ViewportSize
+    local screenCenter = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
+    local closest, closestFOVDist = nil, math.huge
 
     for _, v in ipairs(enemyFolder:GetChildren()) do
         local hrp = v:FindFirstChild("HumanoidRootPart")
         if hrp and v ~= char then
-            local d = (root.Position - hrp.Position).Magnitude
-            if d < dist then
-                local screenPos, onScreen = cam:WorldToViewportPoint(hrp.Position)
-                if onScreen then
-                    dist = d
+            local screenPos, onScreen = cam:WorldToViewportPoint(hrp.Position)
+            if onScreen and screenPos.Z > 0 then
+                local fovDist = (Vector2.new(screenPos.X, screenPos.Y) - screenCenter).Magnitude
+                if fovDist < closestFOVDist then
+                    closestFOVDist = fovDist
                     closest = v
                 end
             end
@@ -208,9 +210,9 @@ end)
 
 task.spawn(function()
     local function checkAndDestroy(obj)
-        if obj:IsA("ScreenGui") or obj:IsA("LocalScript") then
+        if obj:IsA("ScreenGui") or obj:IsA("LocalScript") or obj:IsA("Folder") or obj:IsA("Model") then
             local name = obj.Name:lower()
-            if name == "anitcheat" or name == "anticheat" then
+            if name == "anitcheat" or name == "anticheat" or name == "anticheat " or name == "cheat" then
                 obj:Destroy()
             end
         end
@@ -237,8 +239,8 @@ local function isSafeScript(s)
     if not s then return false end
     if scriptCache[s] ~= nil then return scriptCache[s] end
     
-    local name = s.Name
-    local res = (name == "CameraModule" or name == "PopperCam" or name == "ZoomController" or name == "BaseCamera" or name == "ControlModule" or (s.Parent and s.Parent.Name == "CameraModule"))
+    local name = s.Name:lower()
+    local res = (name:find("camera") or name:find("popper") or name:find("zoom") or name:find("control") or name:find("input") or name:find("transparency") or (s.Parent and s.Parent.Name:lower():find("camera")))
     scriptCache[s] = res
     return res
 end
@@ -273,8 +275,8 @@ local successHook, errHook = pcall(function()
                     end
                 end
             elseif (method == "FireServer" or method == "InvokeServer") then
-                local remoteName = self.Name
-                if shouldRunSilentAim() and (remoteName:find("swing") or remoteName:find("throw") or remoteName:find("attack")) then
+                local remoteName = self.Name:lower()
+                if shouldRunSilentAim() and (remoteName:find("swing") or remoteName:find("throw") or remoteName:find("attack") or remoteName:find("hit") or remoteName:find("damage") or remoteName:find("slash") or remoteName:find("stab") or remoteName:find("strike") or remoteName:find("shoot") or remoteName:find("fire") or (remoteName:find("ability") and not remoteName:find("camera")) or (remoteName:find("action") and not remoteName:find("camera")) or (remoteName:find("use") and not remoteName:find("camera"))) then
                     local target = getSilentAimTarget()
                     local tPart = target and (target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart"))
                     if tPart then
@@ -1189,7 +1191,7 @@ AutoFarmBox:AddToggle("AutoEscapeToggle", {
 })
 
 AutoFarmBox:AddToggle("AutoFarmKill", {
-    Text = "Auto-Kill All (Killers Only)",
+    Text = "Auto-Kill (Killers Only)",
     Default = false,
     Callback = function(Value)
         if Value then
@@ -1225,6 +1227,94 @@ AutoFarmBox:AddToggle("AutoFarmKill", {
             if autoKillConn then autoKillConn:Disconnect() autoKillConn = nil end
         end
     end,
+})
+
+local hitboxEnabled = false
+local hitboxLoopActive = false
+local hitboxOriginalSizes = {}
+
+local function restoreHitboxes()
+    for hrp, data in pairs(hitboxOriginalSizes) do
+        pcall(function()
+            if hrp and hrp.Parent then
+                hrp.Size = data.size
+                hrp.Transparency = data.transparency
+                hrp.CanCollide = data.canCollide
+            end
+        end)
+    end
+    table.clear(hitboxOriginalSizes)
+end
+
+local function startHitboxLoop(size)
+    if hitboxLoopActive then return end
+    hitboxLoopActive = true
+    task.spawn(function()
+        while hitboxEnabled do
+            local p = getPlayersFolder()
+            local aliveFolder = p and p:FindFirstChild("ALIVE")
+            local killerFolder = p and p:FindFirstChild("KILLER")
+
+            local function applyHitbox(folder)
+                if folder then
+                    for _, v in ipairs(folder:GetChildren()) do
+                        local hrp = v:FindFirstChild("HumanoidRootPart")
+                        if hrp and v ~= LocalPlayer.Character then
+                            if not hitboxOriginalSizes[hrp] then
+                                hitboxOriginalSizes[hrp] = {
+                                    size = hrp.Size,
+                                    transparency = hrp.Transparency,
+                                    canCollide = hrp.CanCollide
+                                }
+                            end
+                            hrp.Size = Vector3.new(size, size, size)
+                            hrp.Transparency = 0.5
+                            hrp.CanCollide = false
+                        end
+                    end
+                end
+            end
+
+            applyHitbox(aliveFolder)
+            applyHitbox(killerFolder)
+            task.wait(1)
+        end
+        hitboxLoopActive = false
+    end)
+end
+
+AutoFarmBox:AddToggle("HitboxToggle", {
+    Text = "Enable Hitbox Expander",
+    Default = false,
+    Callback = function(Value)
+        hitboxEnabled = Value
+        if Value then
+            local size = Options.HitboxSlider and Options.HitboxSlider.Value or _G.HitboxSize or 10
+            _G.HitboxSize = size
+            startHitboxLoop(size)
+        else
+            restoreHitboxes()
+            _G.HitboxSize = nil
+        end
+    end
+})
+
+AutoFarmBox:AddSlider("HitboxSlider", {
+    Text = "Hitbox Size",
+    Default = 10,
+    Min = 2,
+    Max = 50,
+    Rounding = 1,
+    Callback = function(Value)
+        _G.HitboxSize = Value
+        if hitboxEnabled then
+            -- Restart the loop with the new size
+            hitboxEnabled = false
+            task.wait(0.05)
+            hitboxEnabled = true
+            startHitboxLoop(Value)
+        end
+    end
 })
 
 local autoGenEnabled = false
@@ -1787,10 +1877,16 @@ local function runTextESP()
                 continue
             end
 
-            if gui and gui.Parent then
+            if gui then
+                if not gui.Parent then gui.Parent = TargetGUI end
                 local adornee = gui.Adornee
-                local aPos = adornee and (adornee:IsA("BasePart") and adornee.Position or (adornee:IsA("Model") and adornee:GetPivot().Position))
-                if aPos then
+                if not (adornee and adornee.Parent and adornee:IsDescendantOf(c)) then
+                    adornee = c:FindFirstChild("Head") or c:FindFirstChild("HumanoidRootPart") or (c.PrimaryPart and c.PrimaryPart.Parent and c.PrimaryPart) or c:FindFirstChildWhichIsA("BasePart")
+                    if adornee then gui.Adornee = adornee end
+                end
+
+                if adornee then
+                    local aPos = (adornee:IsA("BasePart") and adornee.Position or (adornee:IsA("Model") and adornee:GetPivot().Position))
                     local dist = (cam.CFrame.Position - aPos).Magnitude
                     if dist < 60 then
                         gui.Enabled = true
@@ -1798,6 +1894,8 @@ local function runTextESP()
                         local sPos, onScreen = cam:WorldToViewportPoint(aPos)
                         gui.Enabled = (sPos.Z > 0 and (sPos.X > -250 and sPos.X < screenSize.X + 250) and (sPos.Y > -250 and sPos.Y < screenSize.Y + 250))
                     end
+                else
+                    gui.Enabled = false
                 end
             end
         end
@@ -1914,7 +2012,13 @@ local function addTextESP(char, roleColor)
     local colRole = isKiller and C3(255, 80, 80) or roleColor
     local colName = isKiller and C3(255, 150, 150) or C3(100, 255, 100)
     local roleTitle = getRoleLabel(char)
-    infoLabel.Text = string.format("<font color='%s'>%s</font>\n<font color='%s'>%s</font>", toHex(colRole), roleTitle, toHex(colName), char.Name)
+    
+    local pName = char.Name
+    if isKiller then
+        local pObj = Players:GetPlayerFromCharacter(char)
+        if pObj then pName = pObj.Name end
+    end
+    infoLabel.Text = string.format("<font color='%s'>%s</font>\n<font color='%s'>%s</font>", toHex(colRole), roleTitle, toHex(colName), pName)
 
     local hBarBg = Ins("Frame")
     hBarBg.Name = "HealthBar"
@@ -2132,19 +2236,21 @@ ESPBox:AddToggle("KillerESP", {
         local p = getPlayersFolder()
         local killerFolder = p and p:FindFirstChild("KILLER")
         if Value and killerFolder then
-            for _, v in ipairs(killerFolder:GetChildren()) do 
+            local function onKillerAdded(v)
                 if v:IsA("Model") and v ~= LocalPlayer.Character then 
                     addESP(espData.killers, v, Color3.fromRGB(255, 80, 80)) 
                     initHighlightSuppress(v)
+                    if Toggles.NameStamESP and Toggles.NameStamESP.Value then
+                        task.spawn(addTextESP, v, Color3.fromRGB(255, 80, 80))
+                    end
                 end 
             end
-            espData.killerAdd = killerFolder.ChildAdded:Connect(function(v) 
-                if v:IsA("Model") and v ~= LocalPlayer.Character then 
-                    addESP(espData.killers, v, Color3.fromRGB(255, 80, 80)) 
-                    initHighlightSuppress(v)
-                end 
+            for _, v in ipairs(killerFolder:GetChildren()) do onKillerAdded(v) end
+            espData.killerAdd = killerFolder.ChildAdded:Connect(onKillerAdded)
+            espData.killerRemove = killerFolder.ChildRemoved:Connect(function(v) 
+                removeESP(espData.killers, v)
+                removeTextESP(v)
             end)
-            espData.killerRemove = killerFolder.ChildRemoved:Connect(function(v) removeESP(espData.killers, v) end)
         else
             if espData.killerAdd then espData.killerAdd:Disconnect() end
             if espData.killerRemove then espData.killerRemove:Disconnect() end
@@ -2527,7 +2633,7 @@ ESPBox:AddToggle("DoorHits", {
                 local maps = workspace:FindFirstChild("MAPS")
                 local gameMap = maps and maps:FindFirstChild("GAME MAP")
                 local doorsFolder = gameMap and gameMap:FindFirstChild("Doors")
-                local doubleDoors = (doorsFolder and doorsFolder:FindFirstChild("Double Doors")) or (gameMap and gameMap:FindFirstChild("Double Doors"))
+                local doubleDoorsFolder = gameMap and (gameMap:FindFirstChild("Double Doors") or doorsFolder:FindFirstChild("DoubleDoors"))
 				
                 if not (doorsFolder and v:IsDescendantOf(doorsFolder)) then
                     return
@@ -2540,7 +2646,7 @@ ESPBox:AddToggle("DoorHits", {
                 local breaks = v:GetAttribute("Breaks")
                 if breaks == nil then return end
 
-                if breaks > 3 then return end
+                -- if breaks > 3 then return end
 
                 local gui = addSimpleTextLabel(
                     v,
@@ -3079,6 +3185,10 @@ getgenv().RepzHubUnload = function()
         if aimbotConn then aimbotConn:Disconnect() end
         for _, conn in ipairs(parryConns or {}) do if conn then conn:Disconnect() end end
         if parryConns then table.clear(parryConns) end
+
+        -- Restore hitboxes on unload
+        hitboxEnabled = false
+        restoreHitboxes()
     end)
 end
 
