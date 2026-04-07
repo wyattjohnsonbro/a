@@ -74,7 +74,6 @@ local function getSilentAimTarget()
     local cam = workspace.CurrentCamera
 	if not cam then return nil end
 
-    -- FOV-based targeting: pick the enemy whose HRP is closest to the screen center
     local viewportSize = cam.ViewportSize
     local screenCenter = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
     local closest, closestFOVDist = nil, math.huge
@@ -104,15 +103,9 @@ local function getPredictedPosition(tPart, origin)
     local vel = tPart.Velocity
     if vel.Magnitude < 0.05 then return pos end
     
-    -- Ping compensation
-    local ping = (LocalPlayer:GetNetworkPing() or 0) 
-    
-    -- Distance / Speed = Travel Time
+    local ping = (LocalPlayer:GetNetworkPing() or 0)    
     local travelTime = (pos - origin).Magnitude / math.max(predictionProjectileSpeed, 1)
-    
-    -- Total time = time for projectile to travel + the time it takes for your 'hit' to reach the server
     local totalTime = travelTime + ping
-    
     return pos + (vel * totalTime * predictionVelocityScale)
 end
 
@@ -2646,7 +2639,7 @@ ESPBox:AddToggle("DoorHits", {
                 local breaks = v:GetAttribute("Breaks")
                 if breaks == nil then return end
 
-                -- if breaks > 3 then return end
+                if breaks > 3 then return end
 
                 local gui = addSimpleTextLabel(
                     v,
