@@ -951,15 +951,19 @@ TasksBox:AddToggle("AutoShakeMinion", {
     Default = false,
     Callback = function(Value)
         if Value then
+            local ignoreFolder = workspace:FindFirstChild("IGNORE")
+            
             autoShakeConn = RunService.RenderStepped:Connect(function()
                 local char = LocalPlayer.Character
                 local root = char and char:FindFirstChild("HumanoidRootPart")
-                if not root then return end
+                if not root or not ignoreFolder then return end
                 
                 local attached = false
-                for obj, _ in pairs(espData.minions) do
-                    if obj and obj.Parent then
+                
+                for _, obj in ipairs(ignoreFolder:GetChildren()) do
+                    if obj.Name == "Minion" then
                         local pos = (obj:IsA("Model") and obj:GetPivot().Position) or (obj:IsA("BasePart") and obj.Position)
+                        
                         if pos and (root.Position - pos).Magnitude < 4.5 then
                             attached = true
                             break
@@ -968,14 +972,19 @@ TasksBox:AddToggle("AutoShakeMinion", {
                 end
                 
                 if attached then
-                    local cam = Workspace.CurrentCamera
-                    local rx = math.rad(math.random(-60, 60))
-                    local ry = math.rad(math.random(-60, 60))
-                    cam.CFrame = cam.CFrame * CFrame.Angles(rx, ry, 0)
+                    local cam = workspace.CurrentCamera
+                    if cam then
+                        local rx = math.rad(math.random(-60, 60))
+                        local ry = math.rad(math.random(-60, 60))
+                        cam.CFrame = cam.CFrame * CFrame.Angles(rx, ry, 0)
+                    end
                 end
             end)
         else
-            if autoShakeConn then autoShakeConn:Disconnect() autoShakeConn = nil end
+            if autoShakeConn then 
+                autoShakeConn:Disconnect() 
+                autoShakeConn = nil 
+            end
         end
     end,
 })
@@ -2254,12 +2263,6 @@ ESPBox:AddToggle("KillerESP", {
     end
 })
 
-local function isMinionObj(v)
-    if not v or not v.Name then return false end
-    local n = string.lower(v.Name)
-    return string.find(n, "minion", 1, true) or string.find(n, "ennard", 1, true) or string.find(n, "stalker", 1, true) or string.find(n, "baby", 1, true) or string.find(n, "bidybab", 1, true) or string.find(n, "bon-bon", 1, true) or string.find(n, "bonnet", 1, true)
-end
-
 local function isTrapObj(v)
     if not v or not v.Name then return false end
     local n = string.lower(v.Name)
@@ -2278,34 +2281,30 @@ ESPBox:AddToggle("MinionESP", {
     Text = "Ennard's minions ESP",
     Default = false,
     Callback = function(Value)
-        if Value then
-            local function checkAndAddMinion(v)
-                if not v or v == LocalPlayer.Character then return end
-                if not activeKillerRole or not activeKillerRole:lower():find("ennard") then 
-                    if espData.minions[v] then removeESP(espData.minions, v) end
-                    return 
-                end
-                if not (v:IsA("Model") or v:IsA("BasePart")) then return end
-                if isMinionObj(v) then
-                    if v:IsA("BasePart") and v.Parent and isMinionObj(v.Parent) then return end
-                    if not espData.minions[v] then
-                        addESP(espData.minions, v, Color3.fromRGB(138, 43, 226), Color3.fromRGB(255, 255, 255))
-                        local lbl = addSimpleTextLabel(v, "Minion", Color3.fromRGB(200, 100, 255), V3(0, 3, 0))
-                        if lbl then espData.texts[v] = {gui = lbl, tag = "minion"} end
-                    end
+        local ignoreFolder = workspace:FindFirstChild("IGNORE")
+        
+        local function isValidMinion(v)
+            return v and v.Name == "Minion" and (v:IsA("Model") or v:IsA("BasePart"))
+        end
+
+        if Value and ignoreFolder then
+            for _, v in ipairs(ignoreFolder:GetChildren()) do
+                if isValidMinion(v) and v ~= LocalPlayer.Character then
+                    addESP(espData.minions, v, Color3.fromRGB(138, 43, 226), Color3.fromRGB(255, 255, 255))
+                    local lbl = addSimpleTextLabel(v, "Minion", Color3.fromRGB(200, 100, 255), Vector3.new(0, 3, 0))
+                    if lbl then espData.texts[v] = {gui = lbl, tag = "minion"} end
                 end
             end
-            local pPlayers = getPlayersFolder()
-            local kFolder = pPlayers and pPlayers:FindFirstChild("KILLER")
-            if kFolder then
-                for _, v in ipairs(kFolder:GetChildren()) do pcall(checkAndAddMinion, v) end
-            end
-            local maps = workspace:FindFirstChild("MAPS")
-            if maps then
-                for _, v in ipairs(maps:GetDescendants()) do pcall(checkAndAddMinion, v) end
-            end
-            espData.minionAdd = workspace.DescendantAdded:Connect(function(v) pcall(checkAndAddMinion, v) end)
-            espData.minionRemove = workspace.DescendantRemoving:Connect(function(v)
+
+            espData.minionAdd = ignoreFolder.ChildAdded:Connect(function(v)
+                if isValidMinion(v) and v ~= LocalPlayer.Character then
+                    addESP(espData.minions, v, Color3.fromRGB(138, 43, 226), Color3.fromRGB(255, 255, 255))
+                    local lbl = addSimpleTextLabel(v, "Minion", Color3.fromRGB(200, 100, 255), Vector3.new(0, 3, 0))
+                    if lbl then espData.texts[v] = {gui = lbl, tag = "minion"} end
+                end
+            end)
+
+            espData.minionRemove = ignoreFolder.ChildRemoved:Connect(function(v)
                 removeESP(espData.minions, v)
                 if espData.texts[v] and espData.texts[v].tag == "minion" then
                     pcall(function() if espData.texts[v].gui then espData.texts[v].gui:Destroy() end end)
@@ -2315,9 +2314,62 @@ ESPBox:AddToggle("MinionESP", {
         else
             if espData.minionAdd then espData.minionAdd:Disconnect() end
             if espData.minionRemove then espData.minionRemove:Disconnect() end
+            
             clearESP(espData.minions)
             for k, data in pairs(espData.texts) do
-                if data and type(data) == "table" and data.tag == "minion" then
+                if data and data.tag == "minion" then
+                    pcall(function() if data.gui then data.gui:Destroy() end end)
+                    espData.texts[k] = nil
+                end
+            end
+        end
+    end
+})
+
+ESPBox:AddToggle("MinionESP", {
+    Text = "Ennard's minions ESP",
+    Default = false,
+    Callback = function(Value)
+        local ignoreFolder = workspace:FindFirstChild("IGNORE")
+        
+        -- Focused check: Is it a physical object named 'Minion'?
+        local function isValidMinion(v)
+            return v and v.Name == "Minion" and (v:IsA("Model") or v:IsA("BasePart"))
+        end
+
+        if Value and ignoreFolder then
+            -- Initial scan of the IGNORE folder
+            for _, v in ipairs(ignoreFolder:GetChildren()) do
+                if isValidMinion(v) and v ~= LocalPlayer.Character then
+                    addESP(espData.minions, v, Color3.fromRGB(138, 43, 226), Color3.fromRGB(255, 255, 255))
+                    local lbl = addSimpleTextLabel(v, "Minion", Color3.fromRGB(200, 100, 255), Vector3.new(0, 3, 0))
+                    if lbl then espData.texts[v] = {gui = lbl, tag = "minion"} end
+                end
+            end
+
+            -- Survivor-style listeners for the IGNORE folder
+            espData.minionAdd = ignoreFolder.ChildAdded:Connect(function(v)
+                if isValidMinion(v) and v ~= LocalPlayer.Character then
+                    addESP(espData.minions, v, Color3.fromRGB(138, 43, 226), Color3.fromRGB(255, 255, 255))
+                    local lbl = addSimpleTextLabel(v, "Minion", Color3.fromRGB(200, 100, 255), Vector3.new(0, 3, 0))
+                    if lbl then espData.texts[v] = {gui = lbl, tag = "minion"} end
+                end
+            end)
+
+            espData.minionRemove = ignoreFolder.ChildRemoved:Connect(function(v)
+                removeESP(espData.minions, v)
+                if espData.texts[v] and espData.texts[v].tag == "minion" then
+                    pcall(function() if espData.texts[v].gui then espData.texts[v].gui:Destroy() end end)
+                    espData.texts[v] = nil
+                end
+            end)
+        else
+            if espData.minionAdd then espData.minionAdd:Disconnect() end
+            if espData.minionRemove then espData.minionRemove:Disconnect() end
+            
+            clearESP(espData.minions)
+            for k, data in pairs(espData.texts) do
+                if data and data.tag == "minion" then
                     pcall(function() if data.gui then data.gui:Destroy() end end)
                     espData.texts[k] = nil
                 end
