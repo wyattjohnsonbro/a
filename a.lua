@@ -954,6 +954,12 @@ TasksBox:AddToggle("AutoShakeMinion", {
             local ignoreFolder = workspace:FindFirstChild("IGNORE")
             
             autoShakeConn = RunService.RenderStepped:Connect(function()
+                local pPlayers = getPlayersFolder()
+                local kFolder = pPlayers and pPlayers:FindFirstChild("KILLER")
+                if kFolder and kFolder:FindFirstChild(LocalPlayer.Name) then 
+                    return 
+                end
+
                 local char = LocalPlayer.Character
                 local root = char and char:FindFirstChild("HumanoidRootPart")
                 if not root or not ignoreFolder then return end
