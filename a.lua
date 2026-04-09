@@ -27,9 +27,9 @@ local _cachedPlayers = nil
 local _lastPlayersTick = 0
 local function getPlayersFolder()
     local now = tick()
-    if not _cachedPlayers or _cachedPlayers.Parent ~= workspace or (now - _lastPlayersTick) > 2 then
+    if not _cachedPlayers or _cachedPlayers.Parent ~= Workspace or (now - _lastPlayersTick) > 2 then
         _lastPlayersTick = now
-        _cachedPlayers = workspace:FindFirstChild("PLAYERS")
+        _cachedPlayers = Workspace.PLAYERS
     end
     return _cachedPlayers
 end
@@ -39,25 +39,34 @@ local CoreGui = game:GetService("CoreGui")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local SoundService = game:GetService("SoundService")
 local LocalPlayer = Players.LocalPlayer
 local silentAimEnabled = false
 local silentAimPrediction = false
 local predictionVelocityScale = 1.0
 local predictionProjectileSpeed = 750 
-local silentAimTarget = nil
+local silentAimFOV = 250
+local silentAimTargetPart = "Head"
+local lastTargetTick = 0
+local cachedTarget = nil
+local lastTargetFrame = 0
 local autoShakeEnabled = false
 local isShaking = false
+
+local targetVelocityData = {} -- { [id] = { lastPos, lastVel, acceleration } }
+
+local function getTargetPart(v)
+    if not v then return nil end
+    local part = v:FindFirstChild(silentAimTargetPart) or v:FindFirstChild("Head") or v:FindFirstChild("HumanoidRootPart") or v:FindFirstChildWhichIsA("BasePart")
+    return part
+end
 
 local activeKillerRole = nil
 local ennardEHeld = false
 
-local lastTargetTick = 0
-local cachedTarget = nil
-local lastTargetFrame = 0
-
 local function getSilentAimTarget()
 	local now = tick()
-	
     if now - lastTargetTick < 0.03 then return cachedTarget end
     lastTargetTick = tick()
     
@@ -71,15 +80,15 @@ local function getSilentAimTarget()
     local enemyFolder = pFolder and pFolder:FindFirstChild(teamFolder)
     if not enemyFolder then cachedTarget = nil return nil end
     
-    local cam = workspace.CurrentCamera
+    local cam = Workspace.CurrentCamera
 	if not cam then return nil end
 
     local viewportSize = cam.ViewportSize
     local screenCenter = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
-    local closest, closestFOVDist = nil, math.huge
+    local closest, closestFOVDist = nil, silentAimFOV
 
     for _, v in ipairs(enemyFolder:GetChildren()) do
-        local hrp = v:FindFirstChild("HumanoidRootPart")
+        local hrp = getTargetPart(v)
         if hrp and v ~= char then
             local screenPos, onScreen = cam:WorldToViewportPoint(hrp.Position)
             if onScreen and screenPos.Z > 0 then
@@ -100,13 +109,26 @@ local function getPredictedPosition(tPart, origin)
     local pos = tPart.Position
     if not (silentAimEnabled and silentAimPrediction) then return pos end
     
-    local vel = tPart.Velocity
-    if vel.Magnitude < 0.05 then return pos end
+    local id = tPart:GetDebugId()
+    local data = targetVelocityData[id] or { lastPos = pos, lastVel = Vector3.zero, acceleration = Vector3.zero }
     
-    local ping = (LocalPlayer:GetNetworkPing() or 0)    
-    local travelTime = (pos - origin).Magnitude / math.max(predictionProjectileSpeed, 1)
-    local totalTime = travelTime + ping
-    return pos + (vel * totalTime * predictionVelocityScale)
+    local currentVel = tPart.Velocity
+    local accel = (currentVel - data.lastVel)
+    targetVelocityData[id] = { lastPos = pos, lastVel = currentVel, acceleration = accel }
+    
+    local ping = (LocalPlayer:GetNetworkPing() or 0)
+    local dist = (pos - origin).Magnitude
+    local timeToHit = dist / math.max(predictionProjectileSpeed, 1)
+    local totalTime = timeToHit + ping
+    
+    local predicted = pos + (currentVel * totalTime * predictionVelocityScale) + (0.5 * accel * (totalTime^2) * predictionVelocityScale)
+    
+    if predictionProjectileSpeed < 2000 then
+        local drop = 0.5 * 196.2 * (totalTime^2)
+        predicted = predicted + Vector3.new(0, drop, 0)
+    end
+    
+    return predicted
 end
 
 local Lighting = game:GetService("Lighting")
@@ -157,7 +179,7 @@ local function getActiveKiller()
     local killerFolder = p and p:FindFirstChild("KILLER")
     if killerFolder then
         for _, v in ipairs(killerFolder:GetChildren()) do
-            if v:FindFirstChild("HumanoidRootPart") and v ~= LocalPlayer.Character then
+            if v:FindFirstChild("HumanoidRootPart") then
                 return v
             end
         end
@@ -203,9 +225,9 @@ end)
 
 task.spawn(function()
     local function checkAndDestroy(obj)
-        if obj:IsA("ScreenGui") or obj:IsA("LocalScript") or obj:IsA("Folder") or obj:IsA("Model") then
+        if obj:IsA("ScreenGui") or obj:IsA("LocalScript") then
             local name = obj.Name:lower()
-            if name == "anitcheat" or name == "anticheat" or name == "anticheat " or name == "cheat" then
+            if name == "anitcheat" or name == "anticheat" then
                 obj:Destroy()
             end
         end
@@ -222,9 +244,7 @@ end)
 
 
 local function shouldRunSilentAim()
-    if not silentAimEnabled then return false end
-    if getMyRole() == "Ennard" then return ennardEHeld end
-    return true
+    return silentAimEnabled
 end
 
 local scriptCache = {}
@@ -232,10 +252,14 @@ local function isSafeScript(s)
     if not s then return false end
     if scriptCache[s] ~= nil then return scriptCache[s] end
     
-    local name = s.Name:lower()
-    local res = (name:find("camera") or name:find("popper") or name:find("zoom") or name:find("control") or name:find("input") or name:find("transparency") or (s.Parent and s.Parent.Name:lower():find("camera")))
+    local name = s.Name
+    local res = (name == "CameraModule" or name == "PopperCam" or name == "ZoomController" or name == "BaseCamera" or name == "ControlModule" or (s.Parent and s.Parent.Name == "CameraModule"))
     scriptCache[s] = res
     return res
+end
+
+local function shouldRunSilentAim()
+    return silentAimEnabled
 end
 
 local successHook, errHook = pcall(function()
@@ -247,65 +271,78 @@ local successHook, errHook = pcall(function()
     gm.__namecall = newcclosure(function(self, ...)
         local method = getnamecallmethod()
         
-        if not checkcaller() then
-            if (method == "Raycast" or method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList") then
-                if shouldRunSilentAim() and not isSafeScript(getcallingscript()) then
-                    local target = getSilentAimTarget()
-                    local tPart = target and (target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart"))
-                    if tPart then
-                        local args = {...}
-                        if method == "Raycast" then
-                            local origin = args[1]
-                            local predictedPos = getPredictedPosition(tPart, origin)
-                            args[2] = (predictedPos - origin).Unit * 1000
-                            return oldNamecall(self, unpack(args))
-                        else
-                            local origin = args[1].Origin
-                            local predictedPos = getPredictedPosition(tPart, origin)
-                            args[1] = Ray.new(origin, (predictedPos - origin).Unit * 1000)
-                            return oldNamecall(self, unpack(args))
-                        end
+        if not checkcaller() and shouldRunSilentAim() then
+            if method == "Raycast" or method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist" then
+                local target = getSilentAimTarget()
+                local tPart = getTargetPart(target)
+                if tPart then
+                    local args = {...}
+                    if method == "Raycast" then
+                        local origin = args[1]
+                        local predictedPos = getPredictedPosition(tPart, origin)
+                        args[2] = (predictedPos - origin).Unit * (args[2].Magnitude or 1000)
+                        return oldNamecall(self, unpack(args))
+                    elseif method:find("FindPartOnRay") then
+                        local origin = args[1].Origin
+                        local predictedPos = getPredictedPosition(tPart, origin)
+                        args[1] = Ray.new(origin, (predictedPos - origin).Unit * (args[1].Direction.Magnitude or 1000))
+                        return oldNamecall(self, unpack(args))
                     end
                 end
-            elseif (method == "FireServer" or method == "InvokeServer") then
-                local remoteName = self.Name:lower()
-                if shouldRunSilentAim() and (remoteName:find("swing") or remoteName:find("throw") or remoteName:find("attack") or remoteName:find("hit") or remoteName:find("damage") or remoteName:find("slash") or remoteName:find("stab") or remoteName:find("strike") or remoteName:find("shoot") or remoteName:find("fire") or (remoteName:find("ability") and not remoteName:find("camera")) or (remoteName:find("action") and not remoteName:find("camera")) or (remoteName:find("use") and not remoteName:find("camera"))) then
+            end
+            
+            if method == "FireServer" or method == "InvokeServer" then
+                local remoteName = tostring(self.Name):lower()
+                if remoteName == "kick" or remoteName == "ban" then return nil end
+
+                if (remoteName:find("swing") or remoteName:find("throw") or remoteName:find("attack") or remoteName:find("hit") or remoteName:find("damage") or remoteName:find("fire") or remoteName:find("shoot") or remoteName:find("bullet") or remoteName:find("projectile")) then
                     local target = getSilentAimTarget()
-                    local tPart = target and (target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart"))
+                    local tPart = getTargetPart(target)
                     if tPart then
                         local args = {...}
                         local char = LocalPlayer.Character
-                        local origin = char and char:FindFirstChild("HumanoidRootPart") and char.HumanoidRootPart.Position or Camera.CFrame.Position
+                        local origin = char and char:FindFirstChild("HumanoidRootPart") and char.HumanoidRootPart.Position or Workspace.CurrentCamera.CFrame.Position
                         local predictedPos = getPredictedPosition(tPart, origin)
                         
-                        for i = 1, #args do
-                            local v = args[i]
+                        for i, v in ipairs(args) do
                             if typeof(v) == "Vector3" then
                                 args[i] = predictedPos
                             elseif typeof(v) == "CFrame" then
                                 args[i] = CFrame.new(predictedPos, predictedPos + (predictedPos - origin).Unit)
+                            elseif typeof(v) == "Instance" and v:IsA("BasePart") and v:IsDescendantOf(target) then
+                                args[i] = tPart
                             end
                         end
                         return oldNamecall(self, unpack(args))
                     end
                 end
+                
+                local args = {...}
+                for _, v in pairs(args) do
+                    if type(v) == "string" then
+                        local argString = v:lower()
+                        if argString == "kick" or argString == "ban" then return nil end
+                    end
+                end
             end
         end
+        
         return oldNamecall(self, ...)
     end)
     
     gm.__index = newcclosure(function(self, k)
-        if not checkcaller() then
-            if (self == Mouse) and (k == "Target" or k == "Hit" or k == "UnitRay") then
-                if shouldRunSilentAim() and not isSafeScript(getcallingscript()) then
-                    local target = getSilentAimTarget()
-                    local tPart = target and (target:FindFirstChild("HumanoidRootPart") or target:FindFirstChildWhichIsA("BasePart"))
-                    if tPart then
-                        local origin = Camera.CFrame.Position
-                        local predictedPos = getPredictedPosition(tPart, origin)
-                        if k == "Target" then return tPart end
-                        if k == "Hit" then return CFrame.new(predictedPos) end
-                        if k == "UnitRay" then return Ray.new(origin, (predictedPos - origin).Unit) end
+        if shouldRunSilentAim() and not checkcaller() and (self == Mouse) then
+            if not isSafeScript(getcallingscript()) and (k == "Target" or k == "Hit" or k == "UnitRay") then
+                local target = getSilentAimTarget()
+                local tPart = getTargetPart(target)
+                if tPart then
+                    if k == "Target" then return tPart end
+                    local origin = Workspace.CurrentCamera.CFrame.Position
+                    local predictedPos = getPredictedPosition(tPart, origin)
+                    if k == "Hit" then return CFrame.new(predictedPos) end
+                    if k == "UnitRay" then
+                        local dir = (predictedPos - origin).Unit
+                        return Ray.new(origin, dir)
                     end
                 end
             end
@@ -490,7 +527,7 @@ local function checkCompatibility()
 end
 
 local supportedCount, totalChecks = checkCompatibility()
-local isCompatible = supportedCount >= (totalChecks - 2) -- Allow for some missing non-essential ones
+local isCompatible = supportedCount >= (totalChecks - 2) 
 local statusText = isCompatible and "your executor seems to support our script." or "your executor might have issues with some features."
 
 local Window = Library:CreateWindow({
@@ -578,8 +615,7 @@ _G.OriginalLobbyMusic = nil
 local function updateEmoteList()
     table.clear(storedEmotes)
     emoteDropdownList = {"Select Emote First"}
-    local repStorage = game:GetService("ReplicatedStorage")
-    local modulesFolder = repStorage:FindFirstChild("Modules")
+    local modulesFolder = ReplicatedStorage:FindFirstChild("Modules")
     local emotesFolder = modulesFolder and modulesFolder:FindFirstChild("Emotes")
     if emotesFolder then
         pcall(function()
@@ -607,9 +643,6 @@ local selectedMusicObj = nil
 local function updateMusicList()
     table.clear(storedMusic)
     musicDropdownList = {"Select Music File"}
-    local soundService = game:GetService("SoundService")
-    local workspace = game:GetService("Workspace")
-
     local function scanFolder(folder)
         for _, obj in ipairs(folder:GetDescendants()) do
             if obj:IsA("Sound") and (obj.Name == "LobbyMusic" or (obj.Parent and obj.Parent.Name == "GAME MAP" and obj.Parent.Parent and obj.Parent.Parent.Name == "MAPS" and obj.Name == "Music") or (obj.Parent and obj.Parent.Name == "Sounds" and obj.Parent.Parent and obj.Parent.Parent.Name == "Assets" and obj.Parent.Parent.Parent and obj.Parent.Parent.Parent.Name == "SnakeGame" and obj.Parent.Parent.Parent.Parent and obj.Parent.Parent.Parent.Parent.Name == "Games" and obj.Parent.Parent.Parent.Parent.Parent and obj.Parent.Parent.Parent.Parent.Parent.Name == "Modules" and obj.Parent.Parent.Parent.Parent.Parent.Parent and obj.Parent.Parent.Parent.Parent.Parent.Parent.Name == "ReplicatedStorage" and obj.Name == "Music") or (obj.Parent and obj.Parent.Name == "ChaseThemes-Killer" and obj.Parent.Parent and obj.Parent.Parent.Name == "KILLER" and obj.Parent.Parent.Parent and obj.Parent.Parent.Parent.Name == "PLAYERS" and obj.Parent.Parent.Parent.Parent and obj.Parent.Parent.Parent.Parent.Name == "workspace") or obj.Name:lower():find("lms") or obj.Name:lower():find("map") or obj.Name:lower():find("chase") or obj.Parent.Name:lower():find("chasethemes") or (obj.Parent and obj.Parent.Name == "Phases" and obj.Parent.Parent and obj.Parent.Parent.Name == "KILLER" and obj.Parent.Parent.Parent and obj.Parent.Parent.Parent.Name == "PLAYERS" and obj.Parent.Parent.Parent.Parent and obj.Parent.Parent.Parent.Parent.Name == "workspace") or (obj.Parent and obj.Parent.Parent and obj.Parent.Parent.Name == "Emotes" and obj.Parent.Parent.Parent and obj.Parent.Parent.Parent.Name == "Modules" and obj.Parent.Parent.Parent.Parent and obj.Parent.Parent.Parent.Parent.Name == "ReplicatedStorage")) then
@@ -619,9 +652,8 @@ local function updateMusicList()
         end
     end
 
-    -- Scan SoundService and Workspace for music
-    scanFolder(soundService)
-    scanFolder(workspace)
+    scanFolder(SoundService)
+    scanFolder(Workspace)
 
     if #musicDropdownList == 1 then table.insert(musicDropdownList, "No Music Found") end
 end
@@ -675,20 +707,18 @@ CustomOSTBox:AddButton({
         end
 
         if customSoundId then
-            -- Stop existing game music
-            for _, sound in ipairs(game:GetService("SoundService"):GetDescendants()) do
+            for _, sound in ipairs(SoundService:GetDescendants()) do
                 if sound:IsA("Sound") and (sound.Name:lower():find("lms") or sound.Name:lower():find("map") or sound.Name:lower():find("chase")) then
                     sound:Stop()
                 end
             end
 
-            -- Replace SoundId of specific game music objects
-            local lobbyMusic = game:GetService("SoundService"):FindFirstChild("LobbyMusic")
-            local gameMapMusic = workspace:FindFirstChild("MAPS") and workspace.MAPS:FindFirstChild("GAME MAP") and workspace.MAPS["GAME MAP"]:FindFirstChild("Music")
-            local snakeGameMusic = game:GetService("ReplicatedStorage"):FindFirstChild("Modules") and game.ReplicatedStorage.Modules:FindFirstChild("Games") and game.ReplicatedStorage.Modules.Games:FindFirstChild("SnakeGame") and game.ReplicatedStorage.Modules.Games.SnakeGame:FindFirstChild("Assets") and game.ReplicatedStorage.Modules.Games.SnakeGame.Assets:FindFirstChild("Sounds") and game.ReplicatedStorage.Modules.Games.SnakeGame.Assets.Sounds:FindFirstChild("Music")
-            local killerChaseThemesMusic = workspace:FindFirstChild("PLAYERS") and workspace.PLAYERS:FindFirstChild("KILLER") and workspace.PLAYERS.KILLER:FindFirstChild("ChaseThemes-Killer") and workspace.PLAYERS.KILLER["ChaseThemes-Killer"]:FindFirstChild("Music")
+            local lobbyMusic = SoundService:FindFirstChild("LobbyMusic")
+            local gameMapMusic = Workspace.MAPS and Workspace.MAPS["GAME MAP"] and Workspace.MAPS["GAME MAP"]:FindFirstChild("Music")
+            local snakeGameMusic = ReplicatedStorage:FindFirstChild("Modules") and ReplicatedStorage.Modules:FindFirstChild("Games") and ReplicatedStorage.Modules.Games:FindFirstChild("SnakeGame") and ReplicatedStorage.Modules.Games.SnakeGame:FindFirstChild("Assets") and ReplicatedStorage.Modules.Games.SnakeGame.Assets:FindFirstChild("Sounds") and ReplicatedStorage.Modules.Games.SnakeGame.Assets.Sounds:FindFirstChild("Music")
+            local killerChaseThemesMusic = Workspace.PLAYERS and Workspace.PLAYERS:FindFirstChild("KILLER") and Workspace.PLAYERS.KILLER:FindFirstChild("ChaseThemes-Killer") and Workspace.PLAYERS.KILLER["ChaseThemes-Killer"]:FindFirstChild("Music")
             local killerPhasesMusic = {}
-            local killerFolder = workspace:FindFirstChild("PLAYERS") and workspace.PLAYERS:FindFirstChild("KILLER")
+            local killerFolder = Workspace.PLAYERS and Workspace.PLAYERS:FindFirstChild("KILLER")
             if killerFolder then
                 for _, killer in ipairs(killerFolder:GetChildren()) do
                     local phasesFolder = killer:FindFirstChild("Phases")
@@ -705,41 +735,38 @@ CustomOSTBox:AddButton({
 
             _G.CustomOST_Active = true
 
-            -- Stop any previously playing custom OST
             if _G.CustomOST_Sound then
                 _G.CustomOST_Sound:Stop()
                 _G.CustomOST_Sound:Destroy()
                 _G.CustomOST_Sound = nil
             end
 
-            -- Create and play the new custom OST
             _G.CustomOST_Sound = Instance.new("Sound")
             _G.CustomOST_Sound.SoundId = customSoundId
-            _G.CustomOST_Sound.Parent = game:GetService("SoundService")
+            _G.CustomOST_Sound.Parent = SoundService
             _G.CustomOST_Sound.Looped = true
-            _G.CustomOST_Sound.Volume = 1 -- Ensure custom music is audible
+            _G.CustomOST_Sound.Volume = 1
             _G.CustomOST_Sound:Play()
 
-            -- Setup a loop to constantly mute game music while Custom OST is active
             if _G.CustomOST_MuteLoop then _G.CustomOST_MuteLoop:Disconnect() end
-            _G.CustomOST_MuteLoop = game:GetService("RunService").Heartbeat:Connect(function()
+            _G.CustomOST_MuteLoop = RunService.Heartbeat:Connect(function()
                 if not _G.CustomOST_Active then
                     if _G.CustomOST_MuteLoop then _G.CustomOST_MuteLoop:Disconnect() end
                     return
                 end
 
                 local allGameMusicObjects = {}
-                local lobbyMusic = game:GetService("SoundService"):FindFirstChild("LobbyMusic")
-                local gameMapMusic = workspace:FindFirstChild("MAPS") and workspace.MAPS:FindFirstChild("GAME MAP") and workspace.MAPS["GAME MAP"]:FindFirstChild("Music")
-                local snakeGameMusic = game:GetService("ReplicatedStorage"):FindFirstChild("Modules") and game.ReplicatedStorage.Modules:FindFirstChild("Games") and game.ReplicatedStorage.Modules.Games:FindFirstChild("SnakeGame") and game.ReplicatedStorage.Modules.Games.SnakeGame:FindFirstChild("Assets") and game.ReplicatedStorage.Modules.Games.SnakeGame.Assets:FindFirstChild("Sounds") and game.ReplicatedStorage.Modules.Games.SnakeGame.Assets.Sounds:FindFirstChild("Music")
-                local killerChaseThemesMusic = workspace:FindFirstChild("PLAYERS") and workspace.PLAYERS:FindFirstChild("KILLER") and workspace.PLAYERS.KILLER:FindFirstChild("ChaseThemes-Killer") and workspace.PLAYERS.KILLER["ChaseThemes-Killer"]:FindFirstChild("Music")
+                local lobbyMusic = SoundService:FindFirstChild("LobbyMusic")
+                local gameMapMusic = Workspace.MAPS and Workspace.MAPS["GAME MAP"] and Workspace.MAPS["GAME MAP"]:FindFirstChild("Music")
+                local snakeGameMusic = ReplicatedStorage:FindFirstChild("Modules") and ReplicatedStorage.Modules:FindFirstChild("Games") and ReplicatedStorage.Modules.Games:FindFirstChild("SnakeGame") and ReplicatedStorage.Modules.Games.SnakeGame:FindFirstChild("Assets") and ReplicatedStorage.Modules.Games.SnakeGame.Assets:FindFirstChild("Sounds") and ReplicatedStorage.Modules.Games.SnakeGame.Assets.Sounds:FindFirstChild("Music")
+                local killerChaseThemesMusic = Workspace.PLAYERS and Workspace.PLAYERS:FindFirstChild("KILLER") and Workspace.PLAYERS.KILLER:FindFirstChild("ChaseThemes-Killer") and Workspace.PLAYERS.KILLER["ChaseThemes-Killer"]:FindFirstChild("Music")
                 
                 if lobbyMusic then table.insert(allGameMusicObjects, lobbyMusic) end
                 if gameMapMusic then table.insert(allGameMusicObjects, gameMapMusic) end
                 if snakeGameMusic then table.insert(allGameMusicObjects, snakeGameMusic) end
                 if killerChaseThemesMusic then table.insert(allGameMusicObjects, killerChaseThemesMusic) end
                 
-                local killerFolder = workspace:FindFirstChild("PLAYERS") and workspace.PLAYERS:FindFirstChild("KILLER")
+                local killerFolder = Workspace.PLAYERS and Workspace.PLAYERS:FindFirstChild("KILLER")
                 if killerFolder then
                     for _, killer in ipairs(killerFolder:GetChildren()) do
                         local phasesFolder = killer:FindFirstChild("Phases")
@@ -903,7 +930,12 @@ SnakeBox:AddToggle("SnakeGodMode", {
 local TasksBox = Tabs.Tasks:AddLeftGroupbox("Automation")
 local autoRepairEnabled = false
 local autoRepairTask = nil
-local repairInterval = 0.5
+local repairIntervalMin = 0.5
+local repairIntervalMax = 1.5
+
+local function getRandomizedRepairInterval()
+    return math.random() * (repairIntervalMax - repairIntervalMin) + repairIntervalMin
+end
 
 TasksBox:AddToggle("AutoRepair", {
     Text = "Auto-Repair Generators",
@@ -922,7 +954,7 @@ TasksBox:AddToggle("AutoRepair", {
                                 evt:FireServer(true)
                             end
                         end
-                        task.wait(repairInterval)
+                        task.wait(getRandomizedRepairInterval())
                     end
                     autoRepairTask = nil
                 end)
@@ -933,15 +965,27 @@ TasksBox:AddToggle("AutoRepair", {
     end,
 })
 
-TasksBox:AddSlider("RepairInterval", {
-    Text = "Auto-Repair Interval",
+TasksBox:AddSlider("RepairIntervalMin", {
+    Text = "Auto-Repair Min Interval",
     Default = 0.5,
     Min = 0.1,
     Max = 15,
-    Rounding = 1,
+    Rounding = 2,
     Suffix = "s",
     Callback = function(Value)
-        repairInterval = Value
+        repairIntervalMin = math.min(Value, repairIntervalMax)
+    end,
+})
+
+TasksBox:AddSlider("RepairIntervalMax", {
+    Text = "Auto-Repair Max Interval",
+    Default = 1.5,
+    Min = 0.1,
+    Max = 15,
+    Rounding = 2,
+    Suffix = "s",
+    Callback = function(Value)
+        repairIntervalMax = math.max(Value, repairIntervalMin)
     end,
 })
 
@@ -1646,6 +1690,106 @@ LocalBox:AddToggle("FlyMobile", {
             end
         end
     end,
+})
+
+local antiDebuffConn = nil
+LocalBox:AddToggle("AntiDebuff", {
+    Text = "Anti-Stun & Anti-Ragdoll",
+    Default = false,
+    Tooltip = "Prevents stuns, ragdolls, and movement locks.",
+    Callback = function(Value)
+        if Value then
+            antiDebuffConn = RunService.Heartbeat:Connect(function()
+                local char = LocalPlayer.Character
+                if char then
+                    if char:GetAttribute("Stun") then char:SetAttribute("Stun", false) end
+                    if char:GetAttribute("Ragdoll") then char:SetAttribute("Ragdoll", false) end
+                    pcall(function()
+                        char:RemoveTag("CantMove")
+                        char:RemoveTag("StopAnim")
+                        char:RemoveTag("KillAnims")
+                        char:RemoveTag("Confusion")
+                    end)
+                end
+            end)
+        else
+            if antiDebuffConn then antiDebuffConn:Disconnect() antiDebuffConn = nil end
+        end
+    end
+})
+local ghostConn = nil
+LocalBox:AddToggle("GhostMode", {
+    Text = "Ghost Mode (Local)",
+    Default = false,
+    Tooltip = "Removes local traces like footsteps and detection indicators.",
+    Callback = function(Value)
+        if Value then
+            ghostConn = RunService.Heartbeat:Connect(function()
+                local char = LocalPlayer.Character
+                if char then
+                    pcall(function()
+                        if not char:HasTag("UNDETECTABLE") then char:AddTag("UNDETECTABLE") end
+                        if not char:HasTag("TRUE_UNDETECTABLE") then char:AddTag("TRUE_UNDETECTABLE") end
+                        if not char:HasTag("INVIS") then char:AddTag("INVIS") end
+                        if not char:HasTag("INVISIBILE") then char:AddTag("INVISIBILE") end
+                    end)
+                end
+            end)
+        else
+            if ghostConn then ghostConn:Disconnect() ghostConn = nil end
+            local char = LocalPlayer.Character
+            if char then
+                pcall(function()
+                    char:RemoveTag("UNDETECTABLE")
+                    char:RemoveTag("TRUE_UNDETECTABLE")
+                    char:RemoveTag("INVIS")
+                    char:RemoveTag("INVISIBILE")
+                end)
+            end
+        end
+    end
+})
+local speedConn = nil
+local WalkSpeedAmount = 24
+local RunSpeedAmount = 40
+LocalBox:AddToggle("NativeSpeed", {
+    Text = "Native Speed Bypass",
+    Default = false,
+    Tooltip = "Changes speed through the game's native attributes.",
+    Callback = function(Value)
+        if Value then
+            speedConn = RunService.Heartbeat:Connect(function()
+                local char = LocalPlayer.Character
+                if char then
+                    char:SetAttribute("WalkSpeed", WalkSpeedAmount)
+                    char:SetAttribute("RunSpeed", RunSpeedAmount)
+                end
+            end)
+        else
+            if speedConn then speedConn:Disconnect() speedConn = nil end
+            local char = LocalPlayer.Character
+            if char then
+                char:SetAttribute("WalkSpeed", 12)
+                char:SetAttribute("RunSpeed", 24)
+            end
+        end
+    end
+})
+LocalBox:AddSlider("WalkSpeedAmount", {
+    Text = "Walk Speed",
+    Default = 24,
+    Min = 12,
+    Max = 100,
+    Rounding = 0,
+    Callback = function(Value) WalkSpeedAmount = Value end
+})
+LocalBox:AddSlider("RunSpeedAmount", {
+    Text = "Run Speed",
+    Default = 40,
+    Min = 24,
+    Max = 150,
+    Rounding = 0,
+    Callback = function(Value) RunSpeedAmount = Value end
 })
 
 local ESPBox = Tabs.Visuals:AddLeftGroupbox("ESP")
@@ -2696,9 +2840,9 @@ ESPBox:AddToggle("DoorHits", {
 
                 local breaks = v:GetAttribute("Breaks")
                 if breaks == nil then return end
-
                 if breaks > 3 then return end
-
+				if breaks = 0 then return end
+					
                 local gui = addSimpleTextLabel(
                     v,
                     "(" .. tostring(breaks) .. ")",
@@ -2781,6 +2925,26 @@ CombatBox:AddToggle("CombatSilentAim", {
     end
 })
 
+CombatBox:AddDropdown("SilentAimPart", {
+    Values = { "Head", "HumanoidRootPart" },
+    Default = 1,
+    Text = "Target Bone",
+    Callback = function(Value)
+        silentAimTargetPart = Value
+    end
+})
+
+CombatBox:AddSlider("SilentAimFOV", {
+    Text = "Silent Aim FOV",
+    Default = 250,
+    Min = 50,
+    Max = 1500,
+    Rounding = 0,
+    Callback = function(Value)
+        silentAimFOV = Value
+    end
+})
+
 CombatBox:AddToggle("SilentAimPrediction", {
     Text = "Enable Prediction",
     Default = false,
@@ -2836,65 +3000,114 @@ CombatBox:AddSlider("ProjectileSpeed", {
 
 
 local autoParryEnabled = false
-local autoParryRadius = 15 -- Keep the radius variable
+local autoParryRadius = 15
 local parryConns = {}
-local WarpInputClient = nil
+local VIM = game:GetService("VirtualInputManager")
+local parrySensitivity = 0.15
+local lastParryTick = 0
 
-local function initWarpInputClient()
-    if not WarpInputClient then
-        local ReplicatedStorage = game:GetService("ReplicatedStorage")
-        local Modules = ReplicatedStorage:FindFirstChild("Modules")
-        local WarpModule = Modules and Modules:FindFirstChild("Warp")
-        if WarpModule then
-            local success, result = pcall(function() return require(WarpModule).Client("Input") end)
-            if success and result then
-                WarpInputClient = result
-            else
-                warn("Failed to get Warp.Client(\"Input\"): ", result)
+local function runPreemptiveParry()
+    if not autoParryEnabled then return end
+    local now = tick()
+    if now - lastParryTick < 0.25 then return end
+
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    local pFolder = getPlayersFolder()
+    local killerFolder = pFolder and pFolder:FindFirstChild("KILLER")
+    if not killerFolder then return end
+
+    for _, k in ipairs(killerFolder:GetChildren()) do
+        local kRoot = k:FindFirstChild("HumanoidRootPart")
+        if kRoot then
+            local dist = (root.Position - kRoot.Position).Magnitude
+            local vel = (kRoot.AssemblyLinearVelocity or kRoot.Velocity)
+            local directionToMe = (root.Position - kRoot.Position).Unit
+            local approachSpeed = vel:Dot(directionToMe)
+
+            if approachSpeed > 5 then
+                local timeToImpact = dist / approachSpeed
+                if timeToImpact <= parrySensitivity and dist <= (autoParryRadius + 10) then
+                    lastParryTick = now
+                    for i = 1, 15 do
+                        VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                        VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                    end
+                    break
+                end
             end
-        else
-            warn("Warp module not found.")
         end
     end
 end
 
+RunService.Heartbeat:Connect(runPreemptiveParry)
 
+local parryAnimsWhitelisted = {
+    ["rbxassetid://102810363618918"] = true,
+    ["rbxassetid://71147082224885"] = true,
+    ["rbxassetid://70869035406359"] = true,
+    ["rbxassetid://119495869953586"] = true,
+    ["rbxassetid://133752270724243"] = true,
+    ["rbxassetid://112503015929213"] = true,
+    ["rbxassetid://109788581549466"] = true,
+    ["rbxassetid://95722006705414"] = true,
+    ["rbxassetid://106673226682917"] = true,
+    ["rbxassetid://120428956410756"] = true
+}
 
 local function onKillerAdded(k)
-    task.spawn(function()
-        local animator = k:FindFirstChildWhichIsA("Animator", true) or k:WaitForChild("Animator", 5)
-        if animator then
-            table.insert(parryConns, animator.AnimationPlayed:Connect(function(track)
-                if autoParryEnabled and WarpInputClient then
-                    local parryAnims = {
-                        ["rbxassetid://102810363618918"] = true, -- Example attack animation ID
-                        ["rbxassetid://71147082224885"] = true,  -- Example attack animation ID
-                        ["rbxassetid://70869035406359"] = true,  -- Example attack animation ID
-                        ["rbxassetid://119495869953586"] = true,
-                        ["rbxassetid://133752270724243"] = true,
-                        ["rbxassetid://112503015929213"] = true,
-                        ["rbxassetid://109788581549466"] = true,
-                        ["rbxassetid://95722006705414"] = true,
-                        ["rbxassetid://106673226682917"] = true,
-                        ["rbxassetid://120428956410756"] = true
-                    }
+    local lastPos = k:FindFirstChild("HumanoidRootPart") and k.HumanoidRootPart.Position or Vector3.zero
+    
+    local function handleTrack(track)
+        if not autoParryEnabled or not parryAnimsWhitelisted[track.Animation.AnimationId] then return end
+        
+        local char = LocalPlayer.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        local killerRoot = k:FindFirstChild("HumanoidRootPart")
 
-                    if parryAnims[track.Animation.AnimationId] then
-                        local char = LocalPlayer.Character
-                        local root = char and char:FindFirstChild("HumanoidRootPart")
-                        local killerRoot = k:FindFirstChild("HumanoidRootPart")
-
-                        if root and killerRoot and (root.Position - killerRoot.Position).Magnitude <= autoParryRadius then
-                            -- Trigger parry using the Warp module
-                            WarpInputClient:Fire(true, {"Ability", 2})
-                            -- Add a small debounce to prevent spamming
-                            task.wait(0.5)
-                        end
-                    end
+        if root and killerRoot then
+            local currentPos = killerRoot.Position
+            local velocity = (currentPos - lastPos) / (1/60)
+            
+            local dist = (root.Position - currentPos).Magnitude
+            local directionToMe = (root.Position - currentPos).Unit
+            local approachSpeed = velocity:Dot(directionToMe)
+            
+            local effectiveRadius = autoParryRadius + math.clamp(approachSpeed * 0.5, 0, 35)
+            
+            if dist <= effectiveRadius then
+                for i = 1, 15 do 
+                    VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                    VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
                 end
-            end))
+                task.wait(0.2)
+            end
         end
-    end)
+    end
+
+    local function setup(animator)
+        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+            task.spawn(handleTrack, track)
+        end
+        table.insert(parryConns, animator.AnimationPlayed:Connect(handleTrack))
+    end
+
+    local animator = k:FindFirstChildWhichIsA("Animator", true)
+    if animator then
+        setup(animator)
+    else
+        task.spawn(function()
+            local found = k:WaitForChild("Animator", 5)
+            if found then setup(found) end
+        end)
+    end
+    
+    table.insert(parryConns, RunService.Heartbeat:Connect(function()
+        local hrp = k:FindFirstChild("HumanoidRootPart")
+        if hrp then lastPos = hrp.Position end
+    end))
 end
 
 CombatBox:AddToggle("AutoParry", {
@@ -2903,19 +3116,13 @@ CombatBox:AddToggle("AutoParry", {
     Callback = function(Value)
         autoParryEnabled = Value
         if Value then
-            initWarpInputClient()
-            if WarpInputClient then
-                local p = getPlayersFolder()
-                local killerFolder = p and p:FindFirstChild("KILLER")
-                if killerFolder then
-                    for _, k in ipairs(killerFolder:GetChildren()) do
-                        onKillerAdded(k)
-                    end
-                    table.insert(parryConns, killerFolder.ChildAdded:Connect(onKillerAdded))
+            local p = getPlayersFolder()
+            local killerFolder = p and p:FindFirstChild("KILLER")
+            if killerFolder then
+                for _, k in ipairs(killerFolder:GetChildren()) do
+                    onKillerAdded(k)
                 end
-            else
-                Library:Notify("Warp Input Client not available. Auto Parry may not work.", 5)
-                Options.AutoParry:SetValue(false)
+                table.insert(parryConns, killerFolder.ChildAdded:Connect(onKillerAdded))
             end
         else
             for _, conn in ipairs(parryConns) do if conn.Disconnect then conn:Disconnect() end end
@@ -2924,19 +3131,27 @@ CombatBox:AddToggle("AutoParry", {
     end
 })
 
-CombatBox:AddSlider("ParryRadius", {
-    Text = "Auto-Parry Radius",
+CombatBox:AddSlider("AutoParryRadius", {
+    Text = "Auto Parry Radius",
     Default = 15,
     Min = 5,
-    Max = 17,
+    Max = 100,
     Rounding = 0,
-    Suffix = " Studs",
     Callback = function(Value)
         autoParryRadius = Value
-        debugLog("Radius updated to: " .. Value)
     end
 })
 
+CombatBox:AddSlider("ParrySensitivity", {
+    Text = "Parry Sensitivity (Prediction)",
+    Default = 0.15,
+    Min = 0.05,
+    Max = 0.5,
+    Rounding = 2,
+    Callback = function(Value)
+        parrySensitivity = Value
+    end
+})
 
 local AntiLagBox = Tabs.AntiLag:AddLeftGroupbox("FPS Optimizations")
 AntiLagBox:AddToggle("MazesLowGFX", {
@@ -3166,6 +3381,7 @@ getgenv().RepzHubUnload = function()
         if noclipCharAdd then noclipCharAdd:Disconnect() end
         if pcFlyConn then pcFlyConn:Disconnect() end
         if mobileFlyConn then mobileFlyConn:Disconnect() end
+		if antiDebuffConn then antiDebuffConn:Disconnect() end
         
         local char = LocalPlayer.Character
         if char then
