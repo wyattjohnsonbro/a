@@ -27,7 +27,7 @@ local _cachedPlayers = nil
 local _lastPlayersTick = 0
 local function getPlayersFolder()
     local now = tick()
-    if not _cachedPlayers or _cachedPlayers.Parent ~= Workspace or (now - _lastPlayersTick) > 2 then
+    if not _cachedPlayers or not _cachedPlayers.Parent ~= Workspace or (now - _lastPlayersTick) > 2 then
         _lastPlayersTick = now
         _cachedPlayers = Workspace.PLAYERS
     end
@@ -331,18 +331,22 @@ local successHook, errHook = pcall(function()
     end)
     
     gm.__index = newcclosure(function(self, k)
-        if shouldRunSilentAim() and not checkcaller() and (self == Mouse) then
-            if not isSafeScript(getcallingscript()) and (k == "Target" or k == "Hit" or k == "UnitRay") then
-                local target = getSilentAimTarget()
-                local tPart = getTargetPart(target)
-                if tPart then
-                    if k == "Target" then return tPart end
-                    local origin = Workspace.CurrentCamera.CFrame.Position
-                    local predictedPos = getPredictedPosition(tPart, origin)
-                    if k == "Hit" then return CFrame.new(predictedPos) end
-                    if k == "UnitRay" then
-                        local dir = (predictedPos - origin).Unit
-                        return Ray.new(origin, dir)
+        if not checkcaller() then
+            if shouldRunSilentAim() and (self == Mouse) then
+                if game:GetService("UserInputService"):IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+                    if not isSafeScript(getcallingscript()) and (k == "Target" or k == "Hit" or k == "UnitRay") then
+                        local target = getSilentAimTarget()
+                        local tPart = getTargetPart(target)
+                        if tPart then
+                            if k == "Target" then return tPart end
+                            local origin = Workspace.CurrentCamera.CFrame.Position
+                            local predictedPos = getPredictedPosition(tPart, origin)
+                            if k == "Hit" then return CFrame.new(predictedPos) end
+                            if k == "UnitRay" then
+                                    local dir = (predictedPos - origin).Unit
+                                    return Ray.new(origin, dir)
+                            end
+                        end
                     end
                 end
             end
@@ -1436,98 +1440,102 @@ AutoFarmBox:AddToggle("AutoCompleteGens", {
             if autoGenTask then task.cancel(autoGenTask) end
             autoGenTask = task.spawn(function()
                 while autoGenEnabled do
-                    local char = LocalPlayer.Character
-                    local root = char and char:FindFirstChild("HumanoidRootPart")
-                    local hum = char and char:FindFirstChildOfClass("Humanoid")
-                    if not root or not hum then task.wait(1) continue end
+                    repeat
+                        local char = LocalPlayer.Character
+                        local root = char and char:FindFirstChild("HumanoidRootPart")
+                        local hum = char and char:FindFirstChildOfClass("Humanoid")
+                        if not root or not hum then task.wait(1) break end
 
-                    local gens = getAllGenerators()
-                    if #gens == 0 then
-                        notify2("Auto-Complete Gens", "All generators done! Moving to exit.")
-                        local safeCF = findSafeZoneOrExit()
-                        if safeCF and root then
-                            root.CFrame = safeCF * CFrame.new(0, 0, -2)
+                        local gens = getAllGenerators()
+                        if #gens == 0 then
+                            notify2("Auto-Complete Gens", "All generators done! Moving to exit.")
+                            local safeCF = findSafeZoneOrExit()
+                            if safeCF and root then
+                                root.CFrame = safeCF * CFrame.new(0, 0, -2)
+                            end
+                            task.wait(5)
+                            break
                         end
-                        task.wait(5)
-                        continue
-                    end
 
-                    for _, gen in ipairs(gens) do
-                        if not autoGenEnabled then break end
-                        char = LocalPlayer.Character
-                        root = char and char:FindFirstChild("HumanoidRootPart")
-                        hum = char and char:FindFirstChildOfClass("Humanoid")
-                        if not root or not hum then break end
-
-                        local prog = gen:GetAttribute("Progress") or 0
-                        local done = gen:GetAttribute("Completed") or gen:GetAttribute("Repaired") or false
-                        if done or prog >= 100 then continue end
-
-                        local genPart = gen.PrimaryPart or gen:FindFirstChildWhichIsA("BasePart")
-                        if not genPart then continue end
-
-                        local genPos = genPart.Position
-                        local dist = (root.Position - genPos).Magnitude
-
-                        if dist > 5 then
-                            local steps = math.ceil(dist / 10)
-                            for s = 1, steps do
+                        for _, gen in ipairs(gens) do
+                            repeat
                                 if not autoGenEnabled then break end
                                 char = LocalPlayer.Character
                                 root = char and char:FindFirstChild("HumanoidRootPart")
-                                if not root then break end
-                                local currentDist = (root.Position - genPos).Magnitude
-                                if currentDist <= 5 then break end
-                                local dir = (genPos - root.Position).Unit
-                                root.CFrame = CFrame.new(root.Position + dir * math.min(10, currentDist - 4), genPos)
-                                task.wait(0.05)
-                            end
-                        end
+                                hum = char and char:FindFirstChildOfClass("Humanoid")
+                                if not root or not hum then break end
 
-                        task.wait(0.1)
-                        instantCompleteGenerator(gen)
-                        task.wait(0.3)
+                                local prog = gen:GetAttribute("Progress") or 0
+                                local done = gen:GetAttribute("Completed") or gen:GetAttribute("Repaired") or false
+                                if done or prog >= 100 then break end
 
-                        local genUI = LocalPlayer.PlayerGui:FindFirstChild("Gen")
-                        if genUI then
-                            local main = genUI:FindFirstChild("GeneratorMain")
-                            local evt = main and main:FindFirstChild("Event")
-                            if evt and evt:IsA("RemoteEvent") then
-                                for i = 1, 30 do
-                                    evt:FireServer(true)
-                                    task.wait(0.05)
+                                local genPart = gen.PrimaryPart or gen:FindFirstChildWhichIsA("BasePart")
+                                if not genPart then break end
+
+                                local genPos = genPart.Position
+                                local dist = (root.Position - genPos).Magnitude
+
+                                if dist > 5 then
+                                    local steps = math.ceil(dist / 10)
+                                    for s = 1, steps do
+                                        if not autoGenEnabled then break end
+                                        char = LocalPlayer.Character
+                                        root = char and char:FindFirstChild("HumanoidRootPart")
+                                        if not root then break end
+                                        local currentDist = (root.Position - genPos).Magnitude
+                                        if currentDist <= 5 then break end
+                                        local dir = (genPos - root.Position).Unit
+                                        root.CFrame = CFrame.new(root.Position + dir * math.min(10, currentDist - 4), genPos)
+                                        task.wait(0.05)
+                                    end
                                 end
-                            end
-                        end
 
-                        task.wait(0.2)
-                    end
+                                task.wait(0.1)
+                                instantCompleteGenerator(gen)
+                                task.wait(0.3)
 
-                    if autoGenEnabled then
-                        local safeCF = findSafeZoneOrExit()
-                        if safeCF then
-                            char = LocalPlayer.Character
-                            root = char and char:FindFirstChild("HumanoidRootPart")
-                            if root then
-                                local parts = {}
-                                if char then
-                                    for _, p in ipairs(char:GetDescendants()) do
-                                        if p:IsA("BasePart") then
-                                            p.CanCollide = false
-                                            table.insert(parts, p)
+                                local genUI = LocalPlayer.PlayerGui:FindFirstChild("Gen")
+                                if genUI then
+                                    local main = genUI:FindFirstChild("GeneratorMain")
+                                    local evt = main and main:FindFirstChild("Event")
+                                    if evt and evt:IsA("RemoteEvent") then
+                                        for i = 1, 30 do
+                                            evt:FireServer(true)
+                                            task.wait(0.05)
                                         end
                                     end
                                 end
-                                root.CFrame = safeCF * CFrame.new(0, 0, -1)
-                                task.wait(1)
-                                for _, p in ipairs(parts) do
-                                    if p and p.Parent then p.CanCollide = true end
+
+                                task.wait(0.2)
+                            until true
+                        end
+
+                        if autoGenEnabled then
+                            local safeCF = findSafeZoneOrExit()
+                            if safeCF then
+                                char = LocalPlayer.Character
+                                root = char and char:FindFirstChild("HumanoidRootPart")
+                                if root then
+                                    local parts = {}
+                                    if char then
+                                        for _, p in ipairs(char:GetDescendants()) do
+                                            if p:IsA("BasePart") then
+                                                p.CanCollide = false
+                                                table.insert(parts, p)
+                                            end
+                                        end
+                                    end
+                                    root.CFrame = safeCF * CFrame.new(0, 0, -1)
+                                    task.wait(1)
+                                    for _, p in ipairs(parts) do
+                                        if p and p.Parent then p.CanCollide = true end
+                                    end
                                 end
                             end
                         end
-                    end
 
-                    task.wait(2)
+                        task.wait(2)
+                    until true
                 end
                 autoGenTask = nil
             end)
@@ -1538,6 +1546,7 @@ AutoFarmBox:AddToggle("AutoCompleteGens", {
         end
     end,
 })
+
 
 local LocalBox = Tabs.Local:AddLeftGroupbox("Player Modifications")
 local sprintConn = nil
@@ -1827,25 +1836,25 @@ local autoSuppressEnabled = false
 local suppressConns = {}
 local function initHighlightSuppress(char)
     if not char then return end
-    local function check(h)
-        if h:IsA("Highlight") and (h.Name == "Highlight" or h.Name == "HIGHLIGHT") then
-            local r, g, b = math.floor(h.FillColor.R*255), math.floor(h.FillColor.G*255), math.floor(h.FillColor.B*255)
-            if h.DepthMode == Enum.HighlightDepthMode.Occluded or (r >= 250 and g <= 10 and b <= 10) then
-                local function sync()
-                    if autoSuppressEnabled then
-                        if h.FillTransparency ~= 1 then h.FillTransparency = 1 end
-                        if h.OutlineTransparency ~= 1 then h.OutlineTransparency = 1 end
-                    end
-                end
-                sync()
-                table.insert(suppressConns, h:GetPropertyChangedSignal("FillTransparency"):Connect(sync))
-                table.insert(suppressConns, h:GetPropertyChangedSignal("OutlineTransparency"):Connect(sync))
-                table.insert(suppressConns, h:GetPropertyChangedSignal("FillColor"):Connect(sync))
+    local function hideHighlight(h)
+        if not h:IsA("Highlight") then return end
+        local function sync()
+            if autoSuppressEnabled then
+                if h.FillTransparency ~= 1 then h.FillTransparency = 1 end
+                if h.OutlineTransparency ~= 1 then h.OutlineTransparency = 1 end
             end
         end
+        sync()
+        table.insert(suppressConns, h:GetPropertyChangedSignal("FillTransparency"):Connect(sync))
+        table.insert(suppressConns, h:GetPropertyChangedSignal("OutlineTransparency"):Connect(sync))
+        table.insert(suppressConns, h:GetPropertyChangedSignal("FillColor"):Connect(sync))
+        table.insert(suppressConns, h:GetPropertyChangedSignal("OutlineColor"):Connect(sync))
+        table.insert(suppressConns, h:GetPropertyChangedSignal("DepthMode"):Connect(sync))
     end
-    for _, v in ipairs(char:GetDescendants()) do check(v) end
-    table.insert(suppressConns, char.DescendantAdded:Connect(check))
+    for _, v in ipairs(char:GetDescendants()) do
+        hideHighlight(v)
+    end
+    table.insert(suppressConns, char.DescendantAdded:Connect(hideHighlight))
 end
 
 for i = 1, 64 do
@@ -2946,10 +2955,32 @@ CombatBox:AddSlider("ProjectileSpeed", {
 
 
 local autoParryEnabled = false
-local autoParryRadius = 15
+local autoParryRadius = 15 -- Keep the radius variable
 local parryConns = {}
 local VIM = game:GetService("VirtualInputManager")
-local parrySensitivity = 0.15
+
+local cachedParryRemote = nil
+local function getParryRemote()
+    if cachedParryRemote then return cachedParryRemote end
+    local rs = game:GetService("ReplicatedStorage")
+    local reliables = rs:FindFirstChild("Reliables") or rs:FindFirstChild("Remotes")
+    if reliables then
+        cachedParryRemote = reliables:FindFirstChild("Parry") or reliables:FindFirstChild("Block")
+    end
+    if not cachedParryRemote then
+        for _, v in ipairs(rs:GetDescendants()) do
+            if v:IsA("RemoteEvent") and (v.Name:lower():find("parry") or v.Name:lower():find("block")) then
+                cachedParryRemote = v
+                break
+            end
+        end
+    end
+    return cachedParryRemote
+end
+local parryArgs = { true }
+
+-- Zero-Latency Pre-emptive Tracking
+local parrySensitivity = 0.15 -- Time in seconds to predict impact
 local lastParryTick = 0
 
 local function runPreemptiveParry()
@@ -2966,22 +2997,40 @@ local function runPreemptiveParry()
     if not killerFolder then return end
 
     for _, k in ipairs(killerFolder:GetChildren()) do
-        local kRoot = k:FindFirstChild("HumanoidRootPart")
-        if kRoot then
-            local dist = (root.Position - kRoot.Position).Magnitude
-            local vel = (kRoot.AssemblyLinearVelocity or kRoot.Velocity)
-            local directionToMe = (root.Position - kRoot.Position).Unit
-            local approachSpeed = vel:Dot(directionToMe)
+        local kRole = getRoleLabel(k)
+        local isSpringtrap = kRole:lower():find("springtrap") ~= nil
+        if isSpringtrap then
+            local kRoot = k.PrimaryPart or k:FindFirstChild("HumanoidRootPart") or k:FindFirstChildWhichIsA("BasePart")
+            if kRoot then
+                local dist = (root.Position - kRoot.Position).Magnitude
+                local dirToMe = root.Position - kRoot.Position
+                local directionToMe = dirToMe.Unit
+                -- Horizontal-only facing check (flatten Y so height doesn't matter)
+                local lookVecH = Vector3.new(kRoot.CFrame.LookVector.X, 0, kRoot.CFrame.LookVector.Z)
+                local lookVecHUnit = lookVecH.Magnitude > 0 and lookVecH.Unit or lookVecH
+                local dirToMeH = Vector3.new(dirToMe.X, 0, dirToMe.Z)
+                local forwardDist = dirToMeH:Dot(lookVecHUnit)
+                local lateralOffset = (dirToMeH - lookVecHUnit * forwardDist).Magnitude
+                -- Vertical slab facing check combined with a generous cone angle
+                local isFacingMe = forwardDist > -1.0 and (lateralOffset <= 8.0 or (dirToMeH.Magnitude > 0 and dirToMeH.Unit:Dot(lookVecHUnit) > 0.25))
+                if isFacingMe then
+                    local vel = (kRoot.AssemblyLinearVelocity or kRoot.Velocity)
+                    local approachSpeed = vel:Dot(directionToMe)
 
-            if approachSpeed > 5 then
-                local timeToImpact = dist / approachSpeed
-                if timeToImpact <= parrySensitivity and dist <= (autoParryRadius + 10) then
-                    lastParryTick = now
-                    for i = 1, 15 do
-                        VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-                        VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                    if approachSpeed > 0 then
+                        local timeToImpact = dist / math.max(approachSpeed, 0.01)
+                        if timeToImpact <= parrySensitivity and dist <= (autoParryRadius + 10) then
+                            lastParryTick = now
+                            local remote = getParryRemote()
+                            if remote then
+                                remote:FireServer(unpack(parryArgs))
+                            else
+                                VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                                VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                            end
+                            break
+                        end
                     end
-                    break
                 end
             end
         end
@@ -3004,29 +3053,55 @@ local parryAnimsWhitelisted = {
 }
 
 local function onKillerAdded(k)
-    local lastPos = k:FindFirstChild("HumanoidRootPart") and k.HumanoidRootPart.Position or Vector3.zero
+    local kRoot = k.PrimaryPart or k:FindFirstChild("HumanoidRootPart") or k:FindFirstChildWhichIsA("BasePart")
+    local lastPos = kRoot and kRoot.Position or Vector3.zero
     
     local function handleTrack(track)
+        -- Instant-Action Trigger
         if not autoParryEnabled or not parryAnimsWhitelisted[track.Animation.AnimationId] then return end
         
         local char = LocalPlayer.Character
         local root = char and char:FindFirstChild("HumanoidRootPart")
-        local killerRoot = k:FindFirstChild("HumanoidRootPart")
+        local killerRoot = k.PrimaryPart or k:FindFirstChild("HumanoidRootPart") or k:FindFirstChildWhichIsA("BasePart")
 
         if root and killerRoot then
             local currentPos = killerRoot.Position
+            local dirToMe = root.Position - currentPos
+            local directionToMe = dirToMe.Unit
+            -- Horizontal-only facing check (flatten Y so height doesn't matter)
+            local lookVecH = Vector3.new(killerRoot.CFrame.LookVector.X, 0, killerRoot.CFrame.LookVector.Z)
+            local lookVecHUnit = lookVecH.Magnitude > 0 and lookVecH.Unit or lookVecH
+            local dirToMeH = Vector3.new(dirToMe.X, 0, dirToMe.Z)
+            local forwardDist = dirToMeH:Dot(lookVecHUnit)
+            local lateralOffset = (dirToMeH - lookVecHUnit * forwardDist).Magnitude
+            -- Vertical slab facing check combined with a generous cone angle
+            local isFacingMe = forwardDist > -1.0 and (lateralOffset <= 8.0 or (dirToMeH.Magnitude > 0 and dirToMeH.Unit:Dot(lookVecHUnit) > 0.25))
+            if not isFacingMe then return end
+            
             local velocity = (currentPos - lastPos) / (1/60)
+            local approachSpeed = velocity:Dot(directionToMe)
+            local kRole = getRoleLabel(k)
+            local isSpringtrap = kRole:lower():find("springtrap") ~= nil
+            local effectiveRadius = autoParryRadius
+            
+            -- Only predict (expand radius) if Springtrap
+            if isSpringtrap then
+                effectiveRadius = effectiveRadius + math.clamp(approachSpeed * 0.5, 0, 35)
+            end
             
             local dist = (root.Position - currentPos).Magnitude
-            local directionToMe = (root.Position - currentPos).Unit
-            local approachSpeed = velocity:Dot(directionToMe)
-            
-            local effectiveRadius = autoParryRadius + math.clamp(approachSpeed * 0.5, 0, 35)
-            
             if dist <= effectiveRadius then
-                for i = 1, 15 do 
-                    VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-                    VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                -- Mass Burst to beat the Server's first-frame hit logic
+                local remote = getParryRemote()
+                if remote then
+                    for i = 1, 5 do
+                        remote:FireServer(unpack(parryArgs))
+                    end
+                else
+                    for i = 1, 15 do 
+                        VIM:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+                        VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+                    end
                 end
                 task.wait(0.2)
             end
@@ -3034,9 +3109,11 @@ local function onKillerAdded(k)
     end
 
     local function setup(animator)
+        -- Check existing animations
         for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
             task.spawn(handleTrack, track)
         end
+        -- Listen for new animations
         table.insert(parryConns, animator.AnimationPlayed:Connect(handleTrack))
     end
 
@@ -3050,8 +3127,9 @@ local function onKillerAdded(k)
         end)
     end
     
+    -- Update lastPos in background for manual velocity
     table.insert(parryConns, RunService.Heartbeat:Connect(function()
-        local hrp = k:FindFirstChild("HumanoidRootPart")
+        local hrp = k.PrimaryPart or k:FindFirstChild("HumanoidRootPart") or k:FindFirstChildWhichIsA("BasePart")
         if hrp then lastPos = hrp.Position end
     end))
 end
@@ -3098,6 +3176,158 @@ CombatBox:AddSlider("ParrySensitivity", {
         parrySensitivity = Value
     end
 })
+
+local parryDebugEnabled = false
+local parryDebugPart = nil
+local parryDebugLine = nil
+local parryDebugBill = nil
+local parryDebugTxt = nil
+local parryDebugConn = nil
+
+local function destroyParryDebug()
+    if parryDebugPart then pcall(function() parryDebugPart:Destroy() end); parryDebugPart = nil end
+    if parryDebugLine then pcall(function() parryDebugLine:Destroy() end); parryDebugLine = nil end
+    if parryDebugBill then pcall(function() parryDebugBill:Destroy() end); parryDebugBill = nil end
+    if parryDebugConn then parryDebugConn:Disconnect(); parryDebugConn = nil end
+    parryDebugTxt = nil
+end
+
+CombatBox:AddToggle("ParryDebugViz", {
+    Text = "Debug: Show Parry Slab",
+    Default = false,
+    Callback = function(Value)
+        parryDebugEnabled = Value
+        if Value then
+            parryDebugPart = Instance.new("Part")
+            parryDebugPart.Name = "RepzParrySlab"
+            parryDebugPart.Anchored = true
+            parryDebugPart.CanCollide = false
+            parryDebugPart.CanQuery = false
+            parryDebugPart.CanTouch = false
+            parryDebugPart.CastShadow = false
+            parryDebugPart.Size = Vector3.new(8, 4, autoParryRadius)
+            parryDebugPart.Material = Enum.Material.Neon
+            parryDebugPart.Transparency = 0.65
+            parryDebugPart.Color = Color3.fromRGB(255, 50, 50)
+            parryDebugPart.Parent = Workspace
+
+            parryDebugLine = Instance.new("Part")
+            parryDebugLine.Name = "RepzParryLine"
+            parryDebugLine.Anchored = true
+            parryDebugLine.CanCollide = false
+            parryDebugLine.CanQuery = false
+            parryDebugLine.CanTouch = false
+            parryDebugLine.CastShadow = false
+            parryDebugLine.Size = Vector3.new(0.15, 4, autoParryRadius)
+            parryDebugLine.Material = Enum.Material.Neon
+            parryDebugLine.Transparency = 0.1
+            parryDebugLine.Color = Color3.fromRGB(255, 255, 255)
+            parryDebugLine.Parent = Workspace
+
+            parryDebugBill = Instance.new("BillboardGui")
+            parryDebugBill.Name = "RepzParryDebugBill"
+            parryDebugBill.Size = UDim2.new(0, 230, 0, 80)
+            parryDebugBill.StudsOffset = Vector3.new(0, 5, 0)
+            parryDebugBill.AlwaysOnTop = true
+            parryDebugBill.Parent = Workspace
+
+            local bg = Instance.new("Frame", parryDebugBill)
+            bg.Size = UDim2.new(1, 0, 1, 0)
+            bg.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+            bg.BackgroundTransparency = 0.25
+            bg.BorderSizePixel = 0
+            local bgCorner = Instance.new("UICorner", bg)
+            bgCorner.CornerRadius = UDim.new(0, 6)
+
+            parryDebugTxt = Instance.new("TextLabel", bg)
+            parryDebugTxt.Size = UDim2.new(1, -10, 1, -8)
+            parryDebugTxt.Position = UDim2.new(0, 5, 0, 4)
+            parryDebugTxt.BackgroundTransparency = 1
+            parryDebugTxt.Font = Enum.Font.GothamBold
+            parryDebugTxt.TextSize = 12
+            parryDebugTxt.TextColor3 = Color3.fromRGB(255, 255, 255)
+            parryDebugTxt.TextStrokeTransparency = 0.5
+            parryDebugTxt.TextXAlignment = Enum.TextXAlignment.Left
+            parryDebugTxt.TextYAlignment = Enum.TextYAlignment.Center
+            parryDebugTxt.Text = "Waiting for killer..."
+
+            parryDebugConn = RunService.Heartbeat:Connect(function()
+                if not parryDebugEnabled then return end
+                local char = LocalPlayer.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
+                local killer = getActiveKiller()
+                local kRoot = killer and (killer.PrimaryPart or killer:FindFirstChild("HumanoidRootPart") or killer:FindFirstChildWhichIsA("BasePart"))
+
+                if not (root and kRoot) then
+                    pcall(function()
+                        if parryDebugPart then parryDebugPart.Transparency = 1 end
+                        if parryDebugLine then parryDebugLine.Transparency = 1 end
+                        if parryDebugBill then parryDebugBill.Adornee = nil end
+                        if parryDebugTxt then
+                            local pFolder = getPlayersFolder()
+                            if not pFolder then
+                                parryDebugTxt.Text = "Folder 'PLAYERS' not found"
+                            elseif not pFolder:FindFirstChild("KILLER") then
+                                parryDebugTxt.Text = "Folder 'KILLER' not found"
+                            elseif not killer then
+                                parryDebugTxt.Text = "Waiting for killer model..."
+                            else
+                                parryDebugTxt.Text = "Killer found, missing RootPart"
+                            end
+                        end
+                    end)
+                    return
+                end
+
+                local killerPos = kRoot.Position
+                local lv = kRoot.CFrame.LookVector
+                local lookVecH = Vector3.new(lv.X, 0, lv.Z)
+                local lookVecHUnit = lookVecH.Magnitude > 0 and lookVecH.Unit or Vector3.new(0, 0, 1)
+
+                local dirToMe = root.Position - killerPos
+                local dirToMeH = Vector3.new(dirToMe.X, 0, dirToMe.Z)
+                local forwardDist = dirToMeH:Dot(lookVecHUnit)
+                local lateralOffset = (dirToMeH - lookVecHUnit * forwardDist).Magnitude
+                local dist = dirToMe.Magnitude
+                local verticalOffset = math.abs(root.Position.Y - killerPos.Y)
+                
+                local isFacingMe = forwardDist > -1.0 and (lateralOffset <= 8.0 or (dirToMeH.Magnitude > 0 and dirToMeH.Unit:Dot(lookVecHUnit) > 0.25)) and verticalOffset <= 15.0
+
+                local slabDepth = autoParryRadius
+                local centerX = killerPos.X + lookVecHUnit.X * (slabDepth / 2)
+                local centerZ = killerPos.Z + lookVecHUnit.Z * (slabDepth / 2)
+                local centerY = killerPos.Y
+                local center = Vector3.new(centerX, centerY, centerZ)
+                local slabCFrame = CFrame.new(center, center + Vector3.new(lookVecHUnit.X, 0, lookVecHUnit.Z))
+
+                pcall(function()
+                    local slabColor = isFacingMe and Color3.fromRGB(50, 255, 50) or Color3.fromRGB(255, 50, 50)
+                    parryDebugPart.Size = Vector3.new(16, 15, slabDepth)
+                    parryDebugPart.CFrame = slabCFrame
+                    parryDebugPart.Transparency = 0.65
+                    parryDebugPart.Color = slabColor
+
+                    parryDebugLine.Size = Vector3.new(0.15, 15, slabDepth)
+                    parryDebugLine.CFrame = slabCFrame
+                    parryDebugLine.Transparency = 0.1
+
+                    parryDebugBill.Adornee = kRoot
+                    parryDebugTxt.Text = string.format(
+                        "Lateral: %.2f / 8.0\nForward: %.2f studs\nVertical: %.2f / 15.0\nFacing: %s",
+                        lateralOffset, forwardDist, verticalOffset,
+                        isFacingMe and "YES (green)" or "NO (red)"
+                    )
+                    parryDebugTxt.TextColor3 = isFacingMe
+                        and Color3.fromRGB(80, 255, 80)
+                        or Color3.fromRGB(255, 80, 80)
+                end)
+            end)
+        else
+            destroyParryDebug()
+        end
+    end
+})
+
 
 local AntiLagBox = Tabs.AntiLag:AddLeftGroupbox("FPS Optimizations")
 AntiLagBox:AddToggle("MazesLowGFX", {
@@ -3328,6 +3558,8 @@ getgenv().RepzHubUnload = function()
         if pcFlyConn then pcFlyConn:Disconnect() end
         if mobileFlyConn then mobileFlyConn:Disconnect() end
 		if antiDebuffConn then antiDebuffConn:Disconnect() end
+        if ghostConn then ghostConn:Disconnect() end
+        if speedConn then speedConn:Disconnect() end
         
         local char = LocalPlayer.Character
         if char then
